@@ -61,9 +61,9 @@ dataset: multimet
 
 # -- File Paths (UPDATE THESE TO MATCH YOUR SYSTEM) --
 # Paths to text files containing lists of basin IDs for training, validation, and testing.
-train_basin_file: /home/gsnearing/flood-forecasting/example-configs/filtered_basins_nse_gt_0.5.txt
-validation_basin_file: /home/gsnearing/flood-forecasting/example-configs/filtered_basins_nse_gt_0.5.txt
-test_basin_file: /home/gsnearing/flood-forecasting/example-configs/filtered_basins_nse_gt_0.5.txt
+train_basin_file: /usr/local/google/home/kruparell/flood-forecasting/example-configs/filtered_basins_nse_gt_0.5.txt
+validation_basin_file: /usr/local/google/home/kruparell/flood-forecasting/example-configs/filtered_basins_nse_gt_0.5.txt
+test_basin_file: /usr/local/google/home/kruparell/flood-forecasting/example-configs/filtered_basins_nse_gt_0.5.txt
 
 # Directory containing the target data (streamflow observations).
 targets_data_dir: ~/Caravan-nc
@@ -71,7 +71,7 @@ targets_data_dir: ~/Caravan-nc
 statics_data_dir: ~/Caravan-nc
 # Directory containing dynamic meteorological forcing data (rain, temp, etc.).
 # 'gs://' indicates data is streamed directly from Google Cloud Storage.
-dynamics_data_dir: /home/gsnearing/multimet #gs://caravan-multimet/v1.1
+dynamics_data_dir: /usr/local/google/home/kruparell/multimet #gs://caravan-multimet/v1.1
 
 # -- Time Periods --
 # Define the start and end dates for each data split (format: dd/mm/yyyy).

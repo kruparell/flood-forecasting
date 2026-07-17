@@ -19,11 +19,15 @@ import re
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
-from typing import TypeVar
+from typing import Optional, TypeVar
 
 import pandas as pd
 import pydantic
 import pydantic.dataclasses
+
+from googlehydrology.utils.baseconfig import BaseConfig
+from googlehydrology.utils.assimilationconfig import AssimilationConfig
+
 from ruamel.yaml import YAML
 
 T = TypeVar('T')
@@ -61,6 +65,21 @@ class Cache:
     byte_limit: int = 2 * 10**9  # in GB
 
 
+# class Config(BaseConfig):
+#         def __init__(self, yml_path_or_dict: Path | dict, dev_mode: bool = False):
+#         super(Config, self).__init__(yml_path_or_dict=yml_path_or_dict, dev_mode=dev_mode)
+#         if not (self._cfg.get('dev_mode', False) or dev_mode):
+#             self._check_cfg_keys(self._cfg)
+#         # Initialize AssimilationConfig if present in the YAML
+#         if ("assimilation_config" in self._cfg.keys()) and (self._cfg["assimilation_config"] is not None):
+#             self._assimilation_config = AssimilationConfig(self._cfg["assimilation_config"])
+#         else:
+#              self._assimilation_config = None
+    
+#     @property
+#     def assimilation_config(self) -> Optional[AssimilationConfig]:
+#         return self._assimilation_config
+    
 class Config(object):
     """Read run configuration from the specified path or dictionary and parse it into a configuration object.
 
