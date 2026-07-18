@@ -19,7 +19,11 @@ from googlehydrology.modelzoo.handoff_forecast_lstm import HandoffForecastLSTM
 from googlehydrology.modelzoo.mean_embedding_forecast_lstm import (
     MeanEmbeddingForecastLSTM,
 )
+from googlehydrology.modelzoo.ealstm import EALSTM
+from googlehydrology.modelzoo.arlstm import ARLSTM
 from googlehydrology.utils.config import Config
+
+ASSIMILATION_MODELS = ['arlstm']
 
 
 def get_model(cfg: Config) -> nn.Module:
@@ -35,10 +39,17 @@ def get_model(cfg: Config) -> nn.Module:
     nn.Module
         A new model instance of the type specified in the config.
     """
+    if cfg.model.lower() not in ASSIMILATION_MODELS and cfg.assimilation_config:
+        raise ValueError(f"Model {cfg.model} does not support data assimilation.")
+
     if cfg.model.lower() == 'handoff_forecast_lstm':
         model = HandoffForecastLSTM(cfg=cfg)
     elif cfg.model.lower() == 'mean_embedding_forecast_lstm':
         model = MeanEmbeddingForecastLSTM(cfg=cfg)
+    elif cfg.model.lower() == 'ealstm':
+        model = EALSTM(cfg=cfg)
+    elif cfg.model.lower() == 'arlstm':
+        model = ARLSTM(cfg=cfg)
     else:
         raise NotImplementedError(
             f'{cfg.model} not implemented or not linked in `get_model()`'

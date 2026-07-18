@@ -1,0 +1,162 @@
+[INFO] 16:22:17.800 (logging_utils.py:setup_logging) -- Logging to /usr/local/google/home/kruparell/flood-forecasting/tutorial/model-runs/5-basin-example_1707_161924/finetune-camels_04115265_1707_162217/output.log initialized.
+[INFO] 16:22:17.801 (basetrainer.py:__init__) -- ### Folder structure created at /usr/local/google/home/kruparell/flood-forecasting/tutorial/model-runs/5-basin-example_1707_161924/finetune-camels_04115265_1707_162217
+[INFO] 16:22:17.801 (basetrainer.py:__init__) -- ### Start finetuning with pretrained model stored in /usr/local/google/home/kruparell/flood-forecasting/tutorial/model-runs/5-basin-example_1707_161924
+[INFO] 16:22:17.801 (basetrainer.py:__init__) -- ### Run configurations for finetune-camels_04115265
+[INFO] 16:22:17.801 (basetrainer.py:__init__) -- allzero_samples_are_invalid: False
+[INFO] 16:22:17.801 (basetrainer.py:__init__) -- batch_size: 256
+[INFO] 16:22:17.801 (basetrainer.py:__init__) -- cache: {'enabled': True, 'byte_limit': 10000000000}
+[INFO] 16:22:17.801 (basetrainer.py:__init__) -- clip_gradient_norm: 1
+[INFO] 16:22:17.801 (basetrainer.py:__init__) -- clip_targets_to_zero: ['streamflow']
+[INFO] 16:22:17.801 (basetrainer.py:__init__) -- commit_hash: ed2dfd3
+[INFO] 16:22:17.801 (basetrainer.py:__init__) -- dataset: multimet
+[INFO] 16:22:17.801 (basetrainer.py:__init__) -- detect_anomaly: False
+[INFO] 16:22:17.802 (basetrainer.py:__init__) -- device: cpu
+[INFO] 16:22:17.802 (basetrainer.py:__init__) -- dynamics_data_dir: /usr/local/google/home/kruparell/Caravans_MultiMet
+[INFO] 16:22:17.802 (basetrainer.py:__init__) -- epochs: 25
+[INFO] 16:22:17.802 (basetrainer.py:__init__) -- experiment_name: finetune-camels_04115265
+[INFO] 16:22:17.802 (basetrainer.py:__init__) -- forecast_embedding: {'type': 'fc', 'hiddens': [20, 20, 20, 20], 'activation': ['tanh', 'tanh', 'tanh', 'linear'], 'dropout': 0.0}
+[INFO] 16:22:17.802 (basetrainer.py:__init__) -- forecast_inputs: {'hres': ['hres_temperature_2m', 'hres_total_precipitation'], 'graphcast': ['graphcast_temperature_2m', 'graphcast_total_precipitation']}
+[INFO] 16:22:17.802 (basetrainer.py:__init__) -- forecast_overlap: 365
+[INFO] 16:22:17.802 (basetrainer.py:__init__) -- head: regression
+[INFO] 16:22:17.802 (basetrainer.py:__init__) -- hidden_size: 16
+[INFO] 16:22:17.802 (basetrainer.py:__init__) -- hindcast_embedding: {'type': 'fc', 'hiddens': [100, 20], 'activation': ['tanh', 'linear'], 'dropout': 0.0}
+[INFO] 16:22:17.802 (basetrainer.py:__init__) -- hindcast_inputs: {'hres': ['hres_temperature_2m', 'hres_total_precipitation'], 'imerg': ['imerg_precipitation'], 'cpc': ['cpc_precipitation']}
+[INFO] 16:22:17.802 (basetrainer.py:__init__) -- img_log_dir: /usr/local/google/home/kruparell/flood-forecasting/tutorial/model-runs/5-basin-example_1707_161924/finetune-camels_04115265_1707_162217/img_log
+[INFO] 16:22:17.802 (basetrainer.py:__init__) -- initial_forget_bias: 3
+[INFO] 16:22:17.802 (basetrainer.py:__init__) -- initial_learning_rate: 0.005
+[INFO] 16:22:17.802 (basetrainer.py:__init__) -- lead_time: 7
+[INFO] 16:22:17.802 (basetrainer.py:__init__) -- learning_rate_drop_factor: 0.9
+[INFO] 16:22:17.802 (basetrainer.py:__init__) -- learning_rate_epochs_drop: 5
+[INFO] 16:22:17.802 (basetrainer.py:__init__) -- learning_rate_strategy: StepLR
+[INFO] 16:22:17.802 (basetrainer.py:__init__) -- load_as_csv: False
+[INFO] 16:22:17.803 (basetrainer.py:__init__) -- log_loss_every_nth_update: 50
+[INFO] 16:22:17.803 (basetrainer.py:__init__) -- log_n_figures: 0
+[INFO] 16:22:17.803 (basetrainer.py:__init__) -- logging_level: INFO
+[INFO] 16:22:17.803 (basetrainer.py:__init__) -- loss: MSE
+[INFO] 16:22:17.803 (basetrainer.py:__init__) -- max_updates_per_epoch: -1
+[INFO] 16:22:17.803 (basetrainer.py:__init__) -- metrics: ['NSE', 'KGE']
+[INFO] 16:22:17.803 (basetrainer.py:__init__) -- model: mean_embedding_forecast_lstm
+[INFO] 16:22:17.803 (basetrainer.py:__init__) -- num_workers: 2
+[INFO] 16:22:17.803 (basetrainer.py:__init__) -- number_of_basins: 1
+[INFO] 16:22:17.803 (basetrainer.py:__init__) -- optimizer: Adam
+[INFO] 16:22:17.803 (basetrainer.py:__init__) -- output_activation: linear
+[INFO] 16:22:17.803 (basetrainer.py:__init__) -- output_dropout: 0.4
+[INFO] 16:22:17.803 (basetrainer.py:__init__) -- package_version: 1.12.0
+[INFO] 16:22:17.803 (basetrainer.py:__init__) -- predict_last_n: 8
+[INFO] 16:22:17.803 (basetrainer.py:__init__) -- print_warnings_once: False
+[INFO] 16:22:17.803 (basetrainer.py:__init__) -- run_dir: /usr/local/google/home/kruparell/flood-forecasting/tutorial/model-runs/5-basin-example_1707_161924/finetune-camels_04115265_1707_162217
+[INFO] 16:22:17.803 (basetrainer.py:__init__) -- seed: 42
+[INFO] 16:22:17.803 (basetrainer.py:__init__) -- seq_length: 365
+[INFO] 16:22:17.803 (basetrainer.py:__init__) -- static_attributes: ['area', 'aridity_ERA5_LAND', 'aridity_FAO_PM', 'frac_snow', 'moisture_index_ERA5_LAND', 'moisture_index_FAO_PM', 'p_mean', 'pet_mean_ERA5_LAND', 'pet_mean_FAO_PM']
+[INFO] 16:22:17.803 (basetrainer.py:__init__) -- statics_data_dir: /usr/local/google/home/kruparell/flood-forecasting/tutorial/Caravan-nc
+[INFO] 16:22:17.804 (basetrainer.py:__init__) -- statics_embedding: {'type': 'fc', 'hiddens': [100, 100, 20], 'activation': ['tanh', 'tanh', 'linear'], 'dropout': 0.0}
+[INFO] 16:22:17.804 (basetrainer.py:__init__) -- target_noise_std: 0.005
+[INFO] 16:22:17.804 (basetrainer.py:__init__) -- target_variables: ['streamflow']
+[INFO] 16:22:17.804 (basetrainer.py:__init__) -- targets_data_dir: /usr/local/google/home/kruparell/flood-forecasting/tutorial/Caravan-nc
+[INFO] 16:22:17.804 (basetrainer.py:__init__) -- test_basin_file: /usr/local/google/home/kruparell/flood-forecasting/tutorial/basin-lists/8-basin-test.txt
+[INFO] 16:22:17.804 (basetrainer.py:__init__) -- test_end_date: 2024-12-31 00:00:00
+[INFO] 16:22:17.804 (basetrainer.py:__init__) -- test_start_date: 2022-01-01 00:00:00
+[INFO] 16:22:17.804 (basetrainer.py:__init__) -- tester_sample_reduction: median
+[INFO] 16:22:17.804 (basetrainer.py:__init__) -- tester_skip_obs_all_nan: True
+[INFO] 16:22:17.804 (basetrainer.py:__init__) -- timestep_counter: True
+[INFO] 16:22:17.804 (basetrainer.py:__init__) -- train_basin_file: /usr/local/google/home/kruparell/flood-forecasting/tutorial/basin-lists/camels_04115265.txt
+[INFO] 16:22:17.804 (basetrainer.py:__init__) -- train_dir: /usr/local/google/home/kruparell/flood-forecasting/tutorial/model-runs/5-basin-example_1707_161924/finetune-camels_04115265_1707_162217/train_data
+[INFO] 16:22:17.804 (basetrainer.py:__init__) -- train_end_date: 2020-12-31 00:00:00
+[INFO] 16:22:17.804 (basetrainer.py:__init__) -- train_start_date: 2000-01-01 00:00:00
+[INFO] 16:22:17.804 (basetrainer.py:__init__) -- union_mapping: {'cpc_precipitation': 'era5land_total_precipitation', 'imerg_precipitation': 'era5land_total_precipitation', 'graphcast_temperature_2m': 'era5land_temperature_2m', 'graphcast_total_precipitation': 'era5land_total_precipitation', 'hres_temperature_2m': 'era5land_temperature_2m', 'hres_total_precipitation': 'era5land_total_precipitation'}
+[INFO] 16:22:17.804 (basetrainer.py:__init__) -- validate_every: 1
+[INFO] 16:22:17.804 (basetrainer.py:__init__) -- validate_n_random_basins: -1
+[INFO] 16:22:17.804 (basetrainer.py:__init__) -- validation_basin_file: /usr/local/google/home/kruparell/flood-forecasting/tutorial/basin-lists/camels_04115265.txt
+[INFO] 16:22:17.805 (basetrainer.py:__init__) -- validation_end_date: 2024-12-31 00:00:00
+[INFO] 16:22:17.805 (basetrainer.py:__init__) -- validation_start_date: 2022-01-01 00:00:00
+[INFO] 16:22:17.805 (basetrainer.py:__init__) -- weight_init_opts: ['lstm-ih-xavier', 'lstm-hh-orthogonal', 'fc-xavier']
+[INFO] 16:22:17.805 (basetrainer.py:__init__) -- base_run_dir: /usr/local/google/home/kruparell/flood-forecasting/tutorial/model-runs/5-basin-example_1707_161924
+[INFO] 16:22:17.805 (basetrainer.py:__init__) -- finetune_modules: ['static_attributes_fc', 'head']
+[INFO] 16:22:17.805 (basetrainer.py:__init__) -- is_finetuning: True
+[INFO] 16:22:17.805 (basetrainer.py:__init__) -- is_continue_training: False
+[INFO] 16:22:17.807 (basetrainer.py:_set_device) -- ### Device cpu will be used for training
+[INFO] 16:22:20.354 (basetrainer.py:initialize_training) -- Starting training from checkpoint /usr/local/google/home/kruparell/flood-forecasting/tutorial/model-runs/5-basin-example_1707_161924/model_epoch002.pt
+[WARNING] 16:22:20.360 (basetrainer.py:_freeze_model_parts) -- Could not resolve the following module parts for finetuning: ['static_attributes_fc']
+[WARNING] 16:22:20.385 (basetrainer.py:initialize_training) -- Validation set to validate every 1 epoch(s), but 'validate_n_random_basins' not set or set to zero. Will validate on the entire validation set.
+[INFO] 16:22:21.941 (basetrainer.py:train_and_validate) -- learning rate is [0.005]
+[INFO] 16:22:35.193 (basetrainer.py:train_and_validate) -- Epoch 1 average loss: avg_loss: 0.24653, avg_total_loss: 0.24653
+[INFO] 16:22:38.526 (basetrainer.py:train_and_validate) -- Epoch 1 average validation loss: 0.03983 -- Median validation metrics: avg_loss: 0.03983, NSE: -11.00044, KGE: -1.42649
+[INFO] 16:22:38.527 (basetrainer.py:train_and_validate) -- learning rate is [0.005]
+[INFO] 16:22:44.444 (basetrainer.py:train_and_validate) -- Epoch 2 average loss: avg_learning_rate: 0.00500, avg_loss: 0.05332, avg_total_loss: 0.05332
+[INFO] 16:22:45.193 (basetrainer.py:train_and_validate) -- Epoch 2 average validation loss: 0.01074 -- Median validation metrics: avg_loss: 0.01074, NSE: -1.71067, KGE: -0.01941
+[INFO] 16:22:45.194 (basetrainer.py:train_and_validate) -- learning rate is [0.005]
+[INFO] 16:22:50.987 (basetrainer.py:train_and_validate) -- Epoch 3 average loss: avg_learning_rate: 0.00500, avg_loss: 0.02818, avg_total_loss: 0.02818
+[INFO] 16:22:51.771 (basetrainer.py:train_and_validate) -- Epoch 3 average validation loss: 0.00717 -- Median validation metrics: avg_loss: 0.00717, NSE: -1.00903, KGE: 0.25339
+[INFO] 16:22:51.772 (basetrainer.py:train_and_validate) -- learning rate is [0.005]
+[INFO] 16:22:57.552 (basetrainer.py:train_and_validate) -- Epoch 4 average loss: avg_learning_rate: 0.00500, avg_loss: 0.02026, avg_total_loss: 0.02026
+[INFO] 16:22:58.314 (basetrainer.py:train_and_validate) -- Epoch 4 average validation loss: 0.00480 -- Median validation metrics: avg_loss: 0.00480, NSE: -0.31989, KGE: 0.43179
+[INFO] 16:22:58.314 (basetrainer.py:train_and_validate) -- learning rate is [0.005]
+[INFO] 16:23:04.410 (basetrainer.py:train_and_validate) -- Epoch 5 average loss: avg_learning_rate: 0.00500, avg_loss: 0.01571, avg_total_loss: 0.01571
+[INFO] 16:23:05.136 (basetrainer.py:train_and_validate) -- Epoch 5 average validation loss: 0.00387 -- Median validation metrics: avg_loss: 0.00387, NSE: -0.05254, KGE: 0.45400
+[INFO] 16:23:05.136 (basetrainer.py:train_and_validate) -- learning rate is [0.0045000000000000005]
+[INFO] 16:23:10.911 (basetrainer.py:train_and_validate) -- Epoch 6 average loss: avg_learning_rate: 0.00450, avg_loss: 0.01255, avg_total_loss: 0.01255
+[INFO] 16:23:11.714 (basetrainer.py:train_and_validate) -- Epoch 6 average validation loss: 0.00342 -- Median validation metrics: avg_loss: 0.00342, NSE: 0.07614, KGE: 0.43802
+[INFO] 16:23:11.715 (basetrainer.py:train_and_validate) -- learning rate is [0.0045000000000000005]
+[INFO] 16:23:17.605 (basetrainer.py:train_and_validate) -- Epoch 7 average loss: avg_learning_rate: 0.00450, avg_loss: 0.01121, avg_total_loss: 0.01121
+[INFO] 16:23:18.350 (basetrainer.py:train_and_validate) -- Epoch 7 average validation loss: 0.00324 -- Median validation metrics: avg_loss: 0.00324, NSE: 0.12544, KGE: 0.39999
+[INFO] 16:23:18.350 (basetrainer.py:train_and_validate) -- learning rate is [0.0045000000000000005]
+[INFO] 16:23:24.770 (basetrainer.py:train_and_validate) -- Epoch 8 average loss: avg_learning_rate: 0.00450, avg_loss: 0.00962, avg_total_loss: 0.00962
+[INFO] 16:23:24.797 (basetrainer.py:train_and_validate) -- Epoch 8 average validation loss: 0.00307 -- Median validation metrics: avg_loss: 0.00307, NSE: 0.17280, KGE: 0.37858
+[INFO] 16:23:24.797 (basetrainer.py:train_and_validate) -- learning rate is [0.0045000000000000005]
+[INFO] 16:23:30.876 (basetrainer.py:train_and_validate) -- Epoch 9 average loss: avg_learning_rate: 0.00450, avg_loss: 0.00791, avg_total_loss: 0.00791
+[INFO] 16:23:31.646 (basetrainer.py:train_and_validate) -- Epoch 9 average validation loss: 0.00302 -- Median validation metrics: avg_loss: 0.00302, NSE: 0.18343, KGE: 0.35616
+[INFO] 16:23:31.646 (basetrainer.py:train_and_validate) -- learning rate is [0.0045000000000000005]
+[INFO] 16:23:38.660 (basetrainer.py:train_and_validate) -- Epoch 10 average loss: avg_learning_rate: 0.00450, avg_loss: 0.00716, avg_total_loss: 0.00716
+[INFO] 16:23:38.916 (basetrainer.py:train_and_validate) -- Epoch 10 average validation loss: 0.00294 -- Median validation metrics: avg_loss: 0.00294, NSE: 0.20738, KGE: 0.34685
+[INFO] 16:23:38.916 (basetrainer.py:train_and_validate) -- learning rate is [0.004050000000000001]
+[INFO] 16:23:45.516 (basetrainer.py:train_and_validate) -- Epoch 11 average loss: avg_learning_rate: 0.00405, avg_loss: 0.00784, avg_total_loss: 0.00784
+[INFO] 16:23:46.256 (basetrainer.py:train_and_validate) -- Epoch 11 average validation loss: 0.00285 -- Median validation metrics: avg_loss: 0.00285, NSE: 0.23261, KGE: 0.33242
+[INFO] 16:23:46.256 (basetrainer.py:train_and_validate) -- learning rate is [0.004050000000000001]
+[INFO] 16:23:52.600 (basetrainer.py:train_and_validate) -- Epoch 12 average loss: avg_learning_rate: 0.00405, avg_loss: 0.00833, avg_total_loss: 0.00833
+[INFO] 16:23:53.420 (basetrainer.py:train_and_validate) -- Epoch 12 average validation loss: 0.00282 -- Median validation metrics: avg_loss: 0.00282, NSE: 0.24248, KGE: 0.32605
+[INFO] 16:23:53.420 (basetrainer.py:train_and_validate) -- learning rate is [0.004050000000000001]
+[INFO] 16:23:59.913 (basetrainer.py:train_and_validate) -- Epoch 13 average loss: avg_learning_rate: 0.00405, avg_loss: 0.00728, avg_total_loss: 0.00728
+[INFO] 16:24:00.666 (basetrainer.py:train_and_validate) -- Epoch 13 average validation loss: 0.00277 -- Median validation metrics: avg_loss: 0.00277, NSE: 0.25665, KGE: 0.32446
+[INFO] 16:24:00.666 (basetrainer.py:train_and_validate) -- learning rate is [0.004050000000000001]
+[INFO] 16:24:07.800 (basetrainer.py:train_and_validate) -- Epoch 14 average loss: avg_learning_rate: 0.00405, avg_loss: 0.00596, avg_total_loss: 0.00596
+[INFO] 16:24:07.830 (basetrainer.py:train_and_validate) -- Epoch 14 average validation loss: 0.00273 -- Median validation metrics: avg_loss: 0.00273, NSE: 0.26936, KGE: 0.31903
+[INFO] 16:24:07.830 (basetrainer.py:train_and_validate) -- learning rate is [0.004050000000000001]
+[INFO] 16:24:13.972 (basetrainer.py:train_and_validate) -- Epoch 15 average loss: avg_learning_rate: 0.00405, avg_loss: 0.00702, avg_total_loss: 0.00702
+[INFO] 16:24:14.736 (basetrainer.py:train_and_validate) -- Epoch 15 average validation loss: 0.00272 -- Median validation metrics: avg_loss: 0.00272, NSE: 0.27110, KGE: 0.31739
+[INFO] 16:24:14.736 (basetrainer.py:train_and_validate) -- learning rate is [0.0036450000000000007]
+[INFO] 16:24:20.889 (basetrainer.py:train_and_validate) -- Epoch 16 average loss: avg_learning_rate: 0.00365, avg_loss: 0.00555, avg_total_loss: 0.00555
+[INFO] 16:24:21.634 (basetrainer.py:train_and_validate) -- Epoch 16 average validation loss: 0.00272 -- Median validation metrics: avg_loss: 0.00272, NSE: 0.27204, KGE: 0.30635
+[INFO] 16:24:21.634 (basetrainer.py:train_and_validate) -- learning rate is [0.0036450000000000007]
+[INFO] 16:24:27.638 (basetrainer.py:train_and_validate) -- Epoch 17 average loss: avg_learning_rate: 0.00365, avg_loss: 0.00596, avg_total_loss: 0.00596
+[INFO] 16:24:28.390 (basetrainer.py:train_and_validate) -- Epoch 17 average validation loss: 0.00269 -- Median validation metrics: avg_loss: 0.00269, NSE: 0.28130, KGE: 0.30628
+[INFO] 16:24:28.390 (basetrainer.py:train_and_validate) -- learning rate is [0.0036450000000000007]
+[INFO] 16:24:34.371 (basetrainer.py:train_and_validate) -- Epoch 18 average loss: avg_learning_rate: 0.00365, avg_loss: 0.00523, avg_total_loss: 0.00523
+[INFO] 16:24:35.880 (basetrainer.py:train_and_validate) -- Epoch 18 average validation loss: 0.00269 -- Median validation metrics: avg_loss: 0.00269, NSE: 0.28262, KGE: 0.30769
+[INFO] 16:24:35.880 (basetrainer.py:train_and_validate) -- learning rate is [0.0036450000000000007]
+[INFO] 16:24:41.830 (basetrainer.py:train_and_validate) -- Epoch 19 average loss: avg_learning_rate: 0.00365, avg_loss: 0.00574, avg_total_loss: 0.00574
+[INFO] 16:24:41.841 (basetrainer.py:train_and_validate) -- Epoch 19 average validation loss: 0.00269 -- Median validation metrics: avg_loss: 0.00269, NSE: 0.28190, KGE: 0.29128
+[INFO] 16:24:41.841 (basetrainer.py:train_and_validate) -- learning rate is [0.0036450000000000007]
+[INFO] 16:24:47.846 (basetrainer.py:train_and_validate) -- Epoch 20 average loss: avg_learning_rate: 0.00365, avg_loss: 0.00479, avg_total_loss: 0.00479
+[INFO] 16:24:48.590 (basetrainer.py:train_and_validate) -- Epoch 20 average validation loss: 0.00266 -- Median validation metrics: avg_loss: 0.00266, NSE: 0.29045, KGE: 0.30376
+[INFO] 16:24:48.590 (basetrainer.py:train_and_validate) -- learning rate is [0.003280500000000001]
+[INFO] 16:24:54.798 (basetrainer.py:train_and_validate) -- Epoch 21 average loss: avg_learning_rate: 0.00328, avg_loss: 0.00495, avg_total_loss: 0.00495
+[INFO] 16:24:55.594 (basetrainer.py:train_and_validate) -- Epoch 21 average validation loss: 0.00266 -- Median validation metrics: avg_loss: 0.00266, NSE: 0.29268, KGE: 0.30418
+[INFO] 16:24:55.594 (basetrainer.py:train_and_validate) -- learning rate is [0.003280500000000001]
+[INFO] 16:25:01.957 (basetrainer.py:train_and_validate) -- Epoch 22 average loss: avg_learning_rate: 0.00328, avg_loss: 0.00497, avg_total_loss: 0.00497
+[INFO] 16:25:02.758 (basetrainer.py:train_and_validate) -- Epoch 22 average validation loss: 0.00268 -- Median validation metrics: avg_loss: 0.00268, NSE: 0.28852, KGE: 0.29827
+[INFO] 16:25:02.758 (basetrainer.py:train_and_validate) -- learning rate is [0.003280500000000001]
+[INFO] 16:25:08.893 (basetrainer.py:train_and_validate) -- Epoch 23 average loss: avg_learning_rate: 0.00328, avg_loss: 0.00409, avg_total_loss: 0.00409
+[INFO] 16:25:09.658 (basetrainer.py:train_and_validate) -- Epoch 23 average validation loss: 0.00267 -- Median validation metrics: avg_loss: 0.00267, NSE: 0.29050, KGE: 0.30143
+[INFO] 16:25:09.658 (basetrainer.py:train_and_validate) -- learning rate is [0.003280500000000001]
+[INFO] 16:25:15.989 (basetrainer.py:train_and_validate) -- Epoch 24 average loss: avg_learning_rate: 0.00328, avg_loss: 0.00503, avg_total_loss: 0.00503
+[INFO] 16:25:16.772 (basetrainer.py:train_and_validate) -- Epoch 24 average validation loss: 0.00269 -- Median validation metrics: avg_loss: 0.00269, NSE: 0.28559, KGE: 0.29422
+[INFO] 16:25:16.772 (basetrainer.py:train_and_validate) -- learning rate is [0.003280500000000001]
+[INFO] 16:25:22.924 (basetrainer.py:train_and_validate) -- Epoch 25 average loss: avg_learning_rate: 0.00328, avg_loss: 0.00496, avg_total_loss: 0.00496
+[INFO] 16:25:23.722 (basetrainer.py:train_and_validate) -- Epoch 25 average validation loss: 0.00267 -- Median validation metrics: avg_loss: 0.00267, NSE: 0.28884, KGE: 0.29422
+[INFO] 16:25:30.681 (logging_utils.py:setup_logging) -- Logging to /usr/local/google/home/kruparell/flood-forecasting/tutorial/model-runs/5-basin-example_1707_161924/finetune-camels_04115265_1707_162217/output.log initialized.
+[WARNING] 16:25:30.682 (warnings.py:_showwarnmsg) -- /usr/local/google/home/kruparell/miniforge3/envs/googlehydrology/lib/python3.12/site-packages/dask/config.py:786: FutureWarning: Dask configuration key 'shuffle' has been deprecated; please use 'dataframe.shuffle.algorithm' instead
+  warnings.warn(
+
+[INFO] 16:25:33.781 (tester.py:_load_weights) -- Using the model weights from /usr/local/google/home/kruparell/flood-forecasting/tutorial/model-runs/5-basin-example_1707_161924/finetune-camels_04115265_1707_162217/model_epoch025.pt
+[INFO] 16:25:47.887 (tester.py:evaluate) -- 1D NSE median=-0.198463
+[INFO] 16:25:47.887 (tester.py:evaluate) -- 1D KGE median=-0.200340

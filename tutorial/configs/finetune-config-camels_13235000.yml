@@ -1,5 +1,6 @@
 base_run_dir: /usr/local/google/home/kruparell/flood-forecasting/tutorial/model-runs/5-basin-example
 batch_size: 256
+dynamics_data_dir: /usr/local/google/home/kruparell/Caravans_MultiMet
 epochs: 25
 experiment_name: finetune-camels_13235000
 finetune_modules:

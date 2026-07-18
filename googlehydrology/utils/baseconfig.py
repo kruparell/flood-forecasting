@@ -36,7 +36,7 @@ class BaseConfig(object):
         if isinstance(yml_path_or_dict, Path):
             self._cfg = self._read_and_parse_config(yml_path=yml_path_or_dict)
         elif isinstance(yml_path_or_dict, dict):
-            self._cfg = BaseConfig._parse_config(yml_path_or_dict)
+            self._cfg = self._parse_config(yml_path_or_dict)
         else:
             raise ValueError(f'Cannot create a config from input of type {type(yml_path_or_dict)}.')
 

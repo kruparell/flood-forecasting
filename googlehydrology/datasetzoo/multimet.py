@@ -215,6 +215,8 @@ class Multimet(Dataset):
         # Load & preprocess the data.
         LOGGER.debug('load data')
         self._dataset = self._load_data()
+        if self._cfg.autoregressive_inputs:
+            self._hindcast_features.extend(self._cfg.autoregressive_inputs)
         memory.release()
         LOGGER.debug('validate all floats are float32')
         _assert_floats_are_float32(self._dataset)
@@ -674,6 +676,18 @@ class Multimet(Dataset):
 
         LOGGER.debug('merge')
         ds = xr.merge(datasets, join='outer')
+
+        if self._cfg.autoregressive_inputs:
+            import re
+            for ar_input in self._cfg.autoregressive_inputs:
+                capture = re.compile(r'^(.*)_shift(\d+)$').search(ar_input)
+                if not capture:
+                    raise ValueError(f"Invalid autoregressive input name: {ar_input}")
+                var_name = capture[1]
+                shift = int(capture[2])
+                if var_name not in ds:
+                    raise ValueError(f"Variable {var_name} to be shifted not found in dataset.")
+                ds[ar_input] = ds[var_name].shift(date=shift)
 
         LOGGER.debug('rechunk')
         ds = rechunk(ds)

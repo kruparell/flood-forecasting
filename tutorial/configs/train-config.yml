@@ -59,7 +59,8 @@ targets_data_dir: ~/flood-forecasting/tutorial/Caravan-nc
 statics_data_dir: ~/flood-forecasting/tutorial/Caravan-nc
 # Directory containing dynamic meteorological forcing data (rain, temp, etc.).
 # 'gs://' indicates data is streamed directly from Google Cloud Storage.
-dynamics_data_dir: gs://caravan-multimet/v1.1
+# dynamics_data_dir: gs://caravan-multimet/v1.1
+dynamics_data_dir: /usr/local/google/home/kruparell/Caravans_MultiMet
 
 # This allows loading the input and target data from CSV files instead of NetCDF files.
 # This makes loading the data significantly slower, but can be useful for local applications
@@ -215,7 +216,8 @@ optimizer: Adam
 
 # -- Training Loop --
 # Number of times the model sees the entire training dataset.
-epochs: 15
+epochs: 2
+# 15
 # Number of samples processed at once before updating weights.
 batch_size: 256
 # Maximum number of weight updates per epoch (useful for very large datasets).

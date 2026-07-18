@@ -1,0 +1,152 @@
+[INFO] 16:16:52.600 (logging_utils.py:setup_logging) -- Logging to /usr/local/google/home/kruparell/flood-forecasting/tutorial/model-runs/5-basin-example_1707_161652/output.log initialized.
+[INFO] 16:16:52.600 (basetrainer.py:__init__) -- ### Folder structure created at /usr/local/google/home/kruparell/flood-forecasting/tutorial/model-runs/5-basin-example_1707_161652
+[INFO] 16:16:52.600 (basetrainer.py:__init__) -- ### Run configurations for 5-basin-example
+[INFO] 16:16:52.600 (basetrainer.py:__init__) -- experiment_name: 5-basin-example
+[INFO] 16:16:52.601 (basetrainer.py:__init__) -- run_dir: /usr/local/google/home/kruparell/flood-forecasting/tutorial/model-runs/5-basin-example_1707_161652
+[INFO] 16:16:52.601 (basetrainer.py:__init__) -- logging_level: INFO
+[INFO] 16:16:52.601 (basetrainer.py:__init__) -- detect_anomaly: False
+[INFO] 16:16:52.601 (basetrainer.py:__init__) -- print_warnings_once: False
+[INFO] 16:16:52.601 (basetrainer.py:__init__) -- dataset: multimet
+[INFO] 16:16:52.601 (basetrainer.py:__init__) -- train_basin_file: /usr/local/google/home/kruparell/flood-forecasting/tutorial/basin-lists/5-basin-train.txt
+[INFO] 16:16:52.601 (basetrainer.py:__init__) -- validation_basin_file: /usr/local/google/home/kruparell/flood-forecasting/tutorial/basin-lists/5-basin-train.txt
+[INFO] 16:16:52.601 (basetrainer.py:__init__) -- test_basin_file: /usr/local/google/home/kruparell/flood-forecasting/tutorial/basin-lists/8-basin-test.txt
+[INFO] 16:16:52.601 (basetrainer.py:__init__) -- targets_data_dir: /usr/local/google/home/kruparell/flood-forecasting/tutorial/Caravan-nc
+[INFO] 16:16:52.601 (basetrainer.py:__init__) -- statics_data_dir: /usr/local/google/home/kruparell/flood-forecasting/tutorial/Caravan-nc
+[INFO] 16:16:52.601 (basetrainer.py:__init__) -- dynamics_data_dir: /usr/local/google/home/kruparell/Caravans_MultiMet
+[INFO] 16:16:52.601 (basetrainer.py:__init__) -- load_as_csv: False
+[INFO] 16:16:52.601 (basetrainer.py:__init__) -- train_start_date: 2000-01-01 00:00:00
+[INFO] 16:16:52.601 (basetrainer.py:__init__) -- train_end_date: 2020-12-31 00:00:00
+[INFO] 16:16:52.601 (basetrainer.py:__init__) -- validation_start_date: 2022-01-01 00:00:00
+[INFO] 16:16:52.601 (basetrainer.py:__init__) -- validation_end_date: 2024-12-31 00:00:00
+[INFO] 16:16:52.601 (basetrainer.py:__init__) -- test_start_date: 2022-01-01 00:00:00
+[INFO] 16:16:52.602 (basetrainer.py:__init__) -- test_end_date: 2024-12-31 00:00:00
+[INFO] 16:16:52.602 (basetrainer.py:__init__) -- hindcast_inputs: {'hres': ['hres_temperature_2m', 'hres_total_precipitation'], 'imerg': ['imerg_precipitation'], 'cpc': ['cpc_precipitation']}
+[INFO] 16:16:52.602 (basetrainer.py:__init__) -- forecast_inputs: {'hres': ['hres_temperature_2m', 'hres_total_precipitation'], 'graphcast': ['graphcast_temperature_2m', 'graphcast_total_precipitation']}
+[INFO] 16:16:52.602 (basetrainer.py:__init__) -- union_mapping: {'cpc_precipitation': 'era5land_total_precipitation', 'imerg_precipitation': 'era5land_total_precipitation', 'graphcast_temperature_2m': 'era5land_temperature_2m', 'graphcast_total_precipitation': 'era5land_total_precipitation', 'hres_temperature_2m': 'era5land_temperature_2m', 'hres_total_precipitation': 'era5land_total_precipitation'}
+[INFO] 16:16:52.602 (basetrainer.py:__init__) -- static_attributes: ['area', 'aridity_ERA5_LAND', 'aridity_FAO_PM', 'frac_snow', 'moisture_index_ERA5_LAND', 'moisture_index_FAO_PM', 'p_mean', 'pet_mean_ERA5_LAND', 'pet_mean_FAO_PM']
+[INFO] 16:16:52.602 (basetrainer.py:__init__) -- target_variables: ['streamflow']
+[INFO] 16:16:52.602 (basetrainer.py:__init__) -- model: mean_embedding_forecast_lstm
+[INFO] 16:16:52.602 (basetrainer.py:__init__) -- hidden_size: 16
+[INFO] 16:16:52.602 (basetrainer.py:__init__) -- head: regression
+[INFO] 16:16:52.602 (basetrainer.py:__init__) -- output_activation: linear
+[INFO] 16:16:52.602 (basetrainer.py:__init__) -- seq_length: 365
+[INFO] 16:16:52.602 (basetrainer.py:__init__) -- lead_time: 7
+[INFO] 16:16:52.602 (basetrainer.py:__init__) -- forecast_overlap: 365
+[INFO] 16:16:52.602 (basetrainer.py:__init__) -- timestep_counter: True
+[INFO] 16:16:52.602 (basetrainer.py:__init__) -- output_dropout: 0.4
+[INFO] 16:16:52.602 (basetrainer.py:__init__) -- initial_forget_bias: 3
+[INFO] 16:16:52.602 (basetrainer.py:__init__) -- weight_init_opts: ['lstm-ih-xavier', 'lstm-hh-orthogonal', 'fc-xavier']
+[INFO] 16:16:52.602 (basetrainer.py:__init__) -- statics_embedding: {'type': 'fc', 'hiddens': [100, 100, 20], 'activation': ['tanh', 'tanh', 'linear'], 'dropout': 0.0}
+[INFO] 16:16:52.602 (basetrainer.py:__init__) -- hindcast_embedding: {'type': 'fc', 'hiddens': [100, 20], 'activation': ['tanh', 'linear'], 'dropout': 0.0}
+[INFO] 16:16:52.603 (basetrainer.py:__init__) -- forecast_embedding: {'type': 'fc', 'hiddens': [20, 20, 20, 20], 'activation': ['tanh', 'tanh', 'tanh', 'linear'], 'dropout': 0.0}
+[INFO] 16:16:52.603 (basetrainer.py:__init__) -- device: cpu
+[INFO] 16:16:52.603 (basetrainer.py:__init__) -- seed: 42
+[INFO] 16:16:52.603 (basetrainer.py:__init__) -- loss: MSE
+[INFO] 16:16:52.603 (basetrainer.py:__init__) -- optimizer: Adam
+[INFO] 16:16:52.603 (basetrainer.py:__init__) -- epochs: 15
+[INFO] 16:16:52.603 (basetrainer.py:__init__) -- batch_size: 256
+[INFO] 16:16:52.603 (basetrainer.py:__init__) -- max_updates_per_epoch: -1
+[INFO] 16:16:52.603 (basetrainer.py:__init__) -- learning_rate_strategy: StepLR
+[INFO] 16:16:52.603 (basetrainer.py:__init__) -- initial_learning_rate: 0.001
+[INFO] 16:16:52.603 (basetrainer.py:__init__) -- learning_rate_drop_factor: 0.5
+[INFO] 16:16:52.603 (basetrainer.py:__init__) -- learning_rate_epochs_drop: 3
+[INFO] 16:16:52.603 (basetrainer.py:__init__) -- clip_gradient_norm: 1
+[INFO] 16:16:52.603 (basetrainer.py:__init__) -- target_noise_std: 0.005
+[INFO] 16:16:52.603 (basetrainer.py:__init__) -- metrics: ['NSE', 'KGE']
+[INFO] 16:16:52.603 (basetrainer.py:__init__) -- validate_every: 1
+[INFO] 16:16:52.603 (basetrainer.py:__init__) -- validate_n_random_basins: -1
+[INFO] 16:16:52.603 (basetrainer.py:__init__) -- tester_skip_obs_all_nan: True
+[INFO] 16:16:52.603 (basetrainer.py:__init__) -- tester_sample_reduction: median
+[INFO] 16:16:52.603 (basetrainer.py:__init__) -- clip_targets_to_zero: ['streamflow']
+[INFO] 16:16:52.604 (basetrainer.py:__init__) -- predict_last_n: 8
+[INFO] 16:16:52.604 (basetrainer.py:__init__) -- allzero_samples_are_invalid: False
+[INFO] 16:16:52.604 (basetrainer.py:__init__) -- num_workers: 2
+[INFO] 16:16:52.604 (basetrainer.py:__init__) -- log_loss_every_nth_update: 50
+[INFO] 16:16:52.604 (basetrainer.py:__init__) -- log_n_figures: 0
+[INFO] 16:16:52.604 (basetrainer.py:__init__) -- cache: {'enabled': True, 'byte_limit': 10000000000}
+[INFO] 16:16:52.604 (basetrainer.py:__init__) -- number_of_basins: 5
+[INFO] 16:16:52.604 (basetrainer.py:__init__) -- train_dir: /usr/local/google/home/kruparell/flood-forecasting/tutorial/model-runs/5-basin-example_1707_161652/train_data
+[INFO] 16:16:52.604 (basetrainer.py:__init__) -- img_log_dir: /usr/local/google/home/kruparell/flood-forecasting/tutorial/model-runs/5-basin-example_1707_161652/img_log
+[INFO] 16:16:52.606 (basetrainer.py:_set_device) -- ### Device cpu will be used for training
+[WARNING] 16:16:55.685 (basetrainer.py:initialize_training) -- Validation set to validate every 1 epoch(s), but 'validate_n_random_basins' not set or set to zero. Will validate on the entire validation set.
+[INFO] 16:16:57.434 (basetrainer.py:train_and_validate) -- learning rate is [0.001]
+[INFO] 16:18:04.916 (basetrainer.py:train_and_validate) -- Epoch 1 average loss: avg_loss: 0.38348, avg_total_loss: 0.38348
+[INFO] 16:18:11.548 (basetrainer.py:train_and_validate) -- Epoch 1 average validation loss: 0.19621 -- Median validation metrics: avg_loss: 0.19621, NSE: 0.54297, KGE: 0.48650
+[INFO] 16:18:11.549 (basetrainer.py:train_and_validate) -- learning rate is [0.001]
+[ERROR] 16:18:40.611 (logging_utils.py:exception_logging) -- Uncaught exception
+Traceback (most recent call last):
+  File "/usr/local/google/home/kruparell/miniforge3/envs/googlehydrology/bin/run", line 6, in <module>
+    sys.exit(_main())
+             ^^^^^^^
+  File "/usr/local/google/home/kruparell/flood-forecasting/googlehydrology/run.py", line 120, in _main
+    start_run(config=config, gpu=args['gpu'])
+  File "/usr/local/google/home/kruparell/flood-forecasting/googlehydrology/run.py", line 164, in start_run
+    start_training(config)
+  File "/usr/local/google/home/kruparell/flood-forecasting/googlehydrology/training/train.py", line 34, in start_training
+    trainer.train_and_validate()
+  File "/usr/local/google/home/kruparell/flood-forecasting/googlehydrology/training/basetrainer.py", line 325, in train_and_validate
+    self._train_epoch(epoch=epoch)
+  File "/usr/local/google/home/kruparell/flood-forecasting/googlehydrology/training/basetrainer.py", line 453, in _train_epoch
+    predictions = self.model(data)
+                  ^^^^^^^^^^^^^^^^
+  File "/usr/local/google/home/kruparell/miniforge3/envs/googlehydrology/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/google/home/kruparell/miniforge3/envs/googlehydrology/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/google/home/kruparell/miniforge3/envs/googlehydrology/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 465, in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/google/home/kruparell/miniforge3/envs/googlehydrology/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/google/home/kruparell/miniforge3/envs/googlehydrology/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/google/home/kruparell/flood-forecasting/googlehydrology/modelzoo/mean_embedding_forecast_lstm.py", line 252, in forward
+    forecast_state = self._calc_lstm(
+                     ^^^^^^^^^^^^^^^^
+  File "/usr/local/google/home/kruparell/flood-forecasting/googlehydrology/modelzoo/mean_embedding_forecast_lstm.py", line 335, in _calc_lstm
+    def _calc_lstm(
+  File "/usr/local/google/home/kruparell/miniforge3/envs/googlehydrology/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 632, in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/google/home/kruparell/miniforge3/envs/googlehydrology/lib/python3.12/site-packages/torch/_functorch/aot_autograd.py", line 1100, in forward
+    return compiled_fn(full_args)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/google/home/kruparell/miniforge3/envs/googlehydrology/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 308, in runtime_wrapper
+    all_outs = call_func_at_runtime_with_args(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/google/home/kruparell/miniforge3/envs/googlehydrology/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/utils.py", line 124, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+                            ^^^^^^^
+  File "/usr/local/google/home/kruparell/miniforge3/envs/googlehydrology/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/utils.py", line 98, in g
+    return f(*args)
+           ^^^^^^^^
+  File "/usr/local/google/home/kruparell/miniforge3/envs/googlehydrology/lib/python3.12/site-packages/torch/autograd/function.py", line 575, in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/google/home/kruparell/miniforge3/envs/googlehydrology/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 1525, in forward
+    fw_outs = call_func_at_runtime_with_args(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/google/home/kruparell/miniforge3/envs/googlehydrology/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/utils.py", line 124, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+                            ^^^^^^^
+  File "/usr/local/google/home/kruparell/miniforge3/envs/googlehydrology/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 488, in wrapper
+    return compiled_fn(runtime_args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/google/home/kruparell/miniforge3/envs/googlehydrology/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 667, in inner_fn
+    outs = compiled_fn(args)
+           ^^^^^^^^^^^^^^^^^
+  File "/usr/local/google/home/kruparell/miniforge3/envs/googlehydrology/lib/python3.12/site-packages/torch/_inductor/codecache.py", line 1478, in __call__
+    return self.current_callable(inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/torchinductor_kruparell/ek/cekmuaqjlxxxvitpjfavdywm62i34z6mmkfibjepekbio23chb7c.py", line 196, in call
+    cpp_fused_cat_div_logical_not_nansum_ne_repeat_sum_0(primals_2, primals_3, buf2, primals_4, buf6, primals_5, buf0, buf1, buf3, buf10, buf4, buf5, buf7, buf8, s0)
+KeyboardInterrupt
+[INFO] 16:18:47.494 (logging_utils.py:setup_logging) -- Logging to /usr/local/google/home/kruparell/flood-forecasting/tutorial/model-runs/5-basin-example_1707_161652/output.log initialized.
+[WARNING] 16:18:47.494 (warnings.py:_showwarnmsg) -- /usr/local/google/home/kruparell/miniforge3/envs/googlehydrology/lib/python3.12/site-packages/dask/config.py:786: FutureWarning: Dask configuration key 'shuffle' has been deprecated; please use 'dataframe.shuffle.algorithm' instead
+  warnings.warn(
+
+[INFO] 16:18:50.654 (tester.py:_load_weights) -- Using the model weights from /usr/local/google/home/kruparell/flood-forecasting/tutorial/model-runs/5-basin-example_1707_161652/model_epoch001.pt

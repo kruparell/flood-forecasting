@@ -18,6 +18,7 @@ import random
 import re
 import shutil
 import sys
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Iterator
 
@@ -41,12 +42,13 @@ from googlehydrology.evaluation.metrics import (
     calculate_metrics,
     get_available_metrics,
 )
+from googlehydrology.evaluation.assimilation import Assimilation
 from googlehydrology.evaluation.utils import (
     BasinBatchSampler,
     get_samples_indexes,
     metrics_to_dataframe,
 )
-from googlehydrology.modelzoo import get_model
+from googlehydrology.modelzoo import get_model, ASSIMILATION_MODELS
 from googlehydrology.modelzoo.basemodel import BaseModel
 from googlehydrology.training import get_loss_obj, get_regularization_obj
 from googlehydrology.training.logger import Logger, do_log_figures
@@ -184,6 +186,7 @@ class BaseTester(object):
         metrics: list | dict = [],
         model: torch.nn.Module = None,
         experiment_logger: Logger = None,
+        data_assimilation: bool = False,
     ) -> dict:
         """Evaluate the model.
 
@@ -200,6 +203,11 @@ class BaseTester(object):
         experiment_logger : Logger, optional
             Logger can be passed during training to log metrics
         """
+        if data_assimilation and self.cfg.model.lower() not in ASSIMILATION_MODELS:
+            raise RuntimeError(
+                'This model currently does not support data assimilation.'
+            )
+
         if model is None:
             if self.init_model:
                 self._load_weights(epoch=epoch)
@@ -248,7 +256,7 @@ class BaseTester(object):
         basins_for_figures = random.sample(list(basins), k=max_figures)
 
         eval_data_it = self._evaluate(
-            model, loader, self.dataset.frequencies, basins
+            model, loader, self.dataset.frequencies, basins, data_assimilation
         )
         pbar = tqdm(
             eval_data_it,
@@ -263,7 +271,7 @@ class BaseTester(object):
                 '# Inference' if self.cfg.inference_mode else '# Evaluation'
             )
 
-        self._ensure_no_previous_results_saved(epoch)
+        self._ensure_no_previous_results_saved(epoch, data_assimilation=data_assimilation)
 
         metrics_results = {}
 
@@ -323,6 +331,7 @@ class BaseTester(object):
                 if (
                     hasattr(self.dataset, 'lead_time')
                     and self.dataset.lead_time
+                    and predict_last_n[lowest_freq] > 1
                 ):
                     time_step_coords += self.dataset.lead_time
                     date_coords = dates[lowest_freq][
@@ -370,11 +379,14 @@ class BaseTester(object):
                 if metrics:
                     for target_variable in self.cfg.target_variables:
                         # stack dates and time_steps so we don't just evaluate every 24h when use_frequencies=[1D, 1h]
+                        stop = -predict_last_n[freq] + 1
+                        if stop == 0:
+                            stop = None
                         obs = (
                             xr.isel(
                                 time_step=slice(
                                     -predict_last_n[freq],
-                                    -predict_last_n[freq] + 1,
+                                    stop,
                                 )
                             )
                             .stack(datetime=['date', 'time_step'])
@@ -389,7 +401,7 @@ class BaseTester(object):
                                 xr.isel(
                                     time_step=slice(
                                         -predict_last_n[freq],
-                                        -predict_last_n[freq] + 1,
+                                        stop,
                                     )
                                 )
                                 .stack(datetime=['date', 'time_step'])
@@ -474,6 +486,7 @@ class BaseTester(object):
                 states={},
                 save_results=save_results,
                 epoch=epoch,
+                data_assimilation=data_assimilation,
             )
 
             if metrics and not experiment_logger:
@@ -566,16 +579,17 @@ class BaseTester(object):
                         basin,
                     )
 
-    def _ensure_no_previous_results_saved(self, epoch: int | None = None):
+    def _ensure_no_previous_results_saved(self, epoch: int | None = None, data_assimilation: bool = False):
         parent_directory = self._parent_directory_for_results(epoch)
 
+        suffix = '_data_assimilation' if data_assimilation else ''
         zarr_stores_to_remove = [
-            parent_directory / f'{self.period}_results.zarr',
+            parent_directory / f'{self.period}_results{suffix}.zarr',
         ]
         for zarr_store in zarr_stores_to_remove:
             shutil.rmtree(zarr_store, ignore_errors=True)
 
-        metrics_csv_path = parent_directory / f'{self.period}_metrics.csv'
+        metrics_csv_path = parent_directory / f'{self.period}_metrics{suffix}.csv'
         if metrics_csv_path.exists():
             metrics_csv_path.unlink()
 
@@ -587,6 +601,7 @@ class BaseTester(object):
         states: dict,
         save_results: bool,
         epoch: int | None,
+        data_assimilation: bool = False,
     ):
         """Store results in various formats to disk.
 
@@ -606,7 +621,8 @@ class BaseTester(object):
             df = metrics_to_dataframe(
                 {basin: results}, metrics_list, self.cfg.target_variables
             )
-            metrics_file = parent_directory / f'{self.period}_metrics.csv'
+            suffix = '_data_assimilation' if data_assimilation else ''
+            metrics_file = parent_directory / f'{self.period}_metrics{suffix}.csv'
             df.to_csv(metrics_file, mode='a', header=not metrics_file.exists())
 
         # store all results in a zarr store
@@ -616,7 +632,8 @@ class BaseTester(object):
             and self.cfg.inference_mode
             and self.period == 'test'
         ):
-            result_file = parent_directory / f'{self.period}_results.zarr'
+            suffix = '_data_assimilation' if data_assimilation else ''
+            result_file = parent_directory / f'{self.period}_results{suffix}.zarr'
 
             dss = (
                 freq_results['xr'].assign_coords(freq=freq)
@@ -643,6 +660,7 @@ class BaseTester(object):
         loader: MultimetDataLoader,
         frequencies: list[str],
         basins: set[str] = set(),
+        data_assimilation: bool = False,
     ):
         predict_last_n = self.cfg.predict_last_n
         if isinstance(predict_last_n, int):
@@ -650,7 +668,13 @@ class BaseTester(object):
                 frequencies[0]: predict_last_n
             }  # if predict_last_n is int, there's only one frequency
 
-        with torch.inference_mode():
+        if data_assimilation:
+            assimilation = Assimilation(self.cfg.assimilation_config)
+
+        with ExitStack() as stack:
+            if not data_assimilation:
+                stack.enter_context(torch.inference_mode())
+
             basin_samples = itertools.groupby(
                 loader, lambda data: data['basin_index'][0].item()
             )
@@ -679,9 +703,14 @@ class BaseTester(object):
                         self.device.type, enabled=(self.device.type == 'cuda')
                     ):
                         data = model.pre_model_hook(data, is_train=False)
-                        predictions, loss = self._get_predictions_and_loss(
-                            model, data
-                        )
+                        if data_assimilation:
+                            predictions = assimilation.assimilate(model, data)
+                            _, all_losses = self.loss_obj(predictions, data)
+                            loss = _values_to_cpu(all_losses)
+                        else:
+                            predictions, loss = self._get_predictions_and_loss(
+                                model, data
+                            )
 
                     for freq in frequencies:
                         if predict_last_n[freq] == 0:

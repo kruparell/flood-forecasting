@@ -8,6 +8,44 @@ from googlehydrology.evaluation.metrics import calculate_metrics, get_available_
 from googlehydrology.training import get_loss_obj, get_optimizer, get_regularization_obj, loss
 from googlehydrology.modelzoo.basemodel import BaseModel
 from googlehydrology.utils.assimilationconfig import AssimilationConfig
+import numpy as np
+
+def _copy_data_dict(d):
+    res = {}
+    for k, v in d.items():
+        if isinstance(v, dict):
+            res[k] = _copy_data_dict(v)
+        elif isinstance(v, torch.Tensor):
+            res[k] = v.clone()
+        elif isinstance(v, np.ndarray):
+            res[k] = v.copy()
+        else:
+            res[k] = v
+    return res
+
+def _detach_and_copy_data_dict(d):
+    res = {}
+    for k, v in d.items():
+        if isinstance(v, dict):
+            res[k] = _detach_and_copy_data_dict(v)
+        elif isinstance(v, torch.Tensor):
+            res[k] = v.detach().clone()
+        elif isinstance(v, np.ndarray):
+            res[k] = v.copy()
+        else:
+            res[k] = v
+    return res
+
+def _mask_data(v, mask):
+    if isinstance(v, dict):
+        return {key: _mask_data(val, mask) for key, val in v.items()}
+    elif isinstance(v, torch.Tensor):
+        return v[mask]
+    elif isinstance(v, np.ndarray):
+        m = mask.cpu().numpy() if hasattr(mask, 'cpu') else mask
+        return v[m]
+    else:
+        return v
 
 class Assimilation(object):
 
@@ -49,7 +87,22 @@ class Assimilation(object):
             timestep_dropout = False
 
         # perform forward pass through the warmup period until the first assimilation step
-        assim_data = {k: (v.clone() if k != 'x_d' else v[:, :self._start_timestep, :].clone()) for k, v in data.items()}
+        assim_data = {}
+        for k, v in data.items():
+            if k == 'x_d':
+                if isinstance(v, dict):
+                    assim_data[k] = {
+                        key: val[:, :self._start_timestep, :].clone()
+                        for key, val in v.items()
+                    }
+                else:
+                    assim_data[k] = v[:, :self._start_timestep, :].clone()
+            elif isinstance(v, torch.Tensor):
+                assim_data[k] = v.clone()
+            elif isinstance(v, np.ndarray):
+                assim_data[k] = v.copy()
+            else:
+                assim_data[k] = v
         pred = model(assim_data)
 
         # store the predictions of all time steps in a list, which we concatenate at the end
@@ -63,14 +116,20 @@ class Assimilation(object):
         # Calculates background loss on the actual target data before any assimilation.
         if verbose:
             test_pred = model(data)
-            no_da_test_loss = self._loss_obj(test_pred, data)
+            no_da_test_loss, _ = self._loss_obj(test_pred, data)
             test_mask = ~torch.isnan(data["y"][:,-1,:]).any(-1)
             no_da_nse = 1 - torch.mean((test_pred['y_hat'][test_mask,-1,:] - data['y'][test_mask,-1,:])**2) / torch.mean((data['y'][test_mask,-1,:] - torch.mean(data['y'][test_mask,-1,:]))**2)
 
         for timestep in range(self._start_timestep, self._end_timestep, self.cfg.assimilation_window):
 
             # slice input sequence only for the specific assimilation window
-            assim_data['x_d'] = data['x_d'][:, timestep:timestep + self.cfg.assimilation_window].clone()
+            if isinstance(data['x_d'], dict):
+                assim_data['x_d'] = {
+                    k: v[:, timestep:timestep + self.cfg.assimilation_window].clone()
+                    for k, v in data['x_d'].items()
+                }
+            else:
+                assim_data['x_d'] = data['x_d'][:, timestep:timestep + self.cfg.assimilation_window].clone()
             assim_data['y'] = data['y'][:, timestep:timestep + self.cfg.assimilation_window].clone()
 
             # required for generating dropout masks
@@ -86,7 +145,7 @@ class Assimilation(object):
                 assim_data[var].requires_grad = True
 
             # create a copy of the data, so we can go back one iteration step, if the update makes the results worse
-            last_assim_data = {k: v.clone() for k, v in assim_data.items()}
+            last_assim_data = _copy_data_dict(assim_data)
 
             # create an optimizer instsance
             optimizer = get_optimizer([assim_data[var] for var in self.cfg.assimilation_targets], self.cfg)
@@ -104,13 +163,13 @@ class Assimilation(object):
             # Verbose output: Calculates background loss on test data using results from last timestep. 
             # This is to check that assimilation is carrying information correctly between timesteps.
             if verbose:
-                test_assim_data = {k: v.detach().clone() for k, v in data.items()}
+                test_assim_data = _detach_and_copy_data_dict(data)
                 test_assim_data['x_d'] = test_assim_data['x_d'][:, timestep + self.cfg.assimilation_window:, :]
                 test_assim_data['y'] = test_assim_data['y'][:, timestep + self.cfg.assimilation_window:, :]
                 test_assim_data['c_n'] = pred['c_n'].detach().clone()
                 test_assim_data['h_n'] = pred['h_n'].detach().clone()
                 test_pred = model(test_assim_data)
-                initial_test_loss = self._loss_obj(test_pred, test_assim_data)
+                initial_test_loss, _ = self._loss_obj(test_pred, test_assim_data)
                 test_initial_nse = 1 - torch.mean((test_pred['y_hat'][test_mask,-1,:] - data['y'][test_mask,-1,:])**2) / torch.mean((data['y'][test_mask,-1,:] - torch.mean(data['y'][test_mask,-1,:]))**2)
                 print(timestep, no_da_test_loss.item(), initial_test_loss.item(), no_da_nse.item(), test_initial_nse.item())
 
@@ -119,12 +178,16 @@ class Assimilation(object):
                 # perform one update step
                 optimizer.zero_grad()
 
-                mask = ~torch.isnan(assim_data["x_d"]).any(1).any(1)
+                if isinstance(assim_data["x_d"], dict):
+                    x_d_stacked = torch.cat(list(assim_data["x_d"].values()), dim=-1)
+                    mask = ~torch.isnan(x_d_stacked).any(1).any(1)
+                else:
+                    mask = ~torch.isnan(assim_data["x_d"]).any(1).any(1)
                 # mask all outputs required for loss computation. Currently exclude states, since those have shape
                 # [1, batch, hidden] for cudalstm and would require some extra steps
-                masked_pred = {k: pred[k][mask] for k in self._loss_obj._prediction_keys}
+                masked_pred = {k: _mask_data(pred[k], mask) for k in self._loss_obj._prediction_keys}
                 # same as above, exclude states
-                masked_data = {k: assim_data[k][mask] for k in data.keys()}
+                masked_data = {k: _mask_data(assim_data[k], mask) for k in data.keys()}
 
                 if timestep_dropout:
                     # sample and apply dropout mask. Not sure why the sampling results always has a trailing dim of 1...
@@ -133,32 +196,36 @@ class Assimilation(object):
                     # We "apply" dropout by setting the targets to NaN, which will exclude those timesteps in the loss
                     masked_data["y"][timestep_mask] = torch.tensor(float("nan")).to(data["y"].device)
 
-                initial_loss_value = self._loss_obj(masked_pred, masked_data)
+                initial_loss_value, _ = self._loss_obj(masked_pred, masked_data)
                 initial_loss_value.backward()
                 optimizer.step()
 
                 # perform another forward pass with updated model inputs and compute the loss after the update
                 pred = model(assim_data)
-                mask = ~torch.isnan(assim_data["x_d"]).any(1).any(1)
-                masked_pred = {k: pred[k][mask] for k in self._loss_obj._prediction_keys}
-                masked_data = {k: assim_data[k][mask] for k in data.keys()}
+                if isinstance(assim_data["x_d"], dict):
+                    x_d_stacked = torch.cat(list(assim_data["x_d"].values()), dim=-1)
+                    mask = ~torch.isnan(x_d_stacked).any(1).any(1)
+                else:
+                    mask = ~torch.isnan(assim_data["x_d"]).any(1).any(1)
+                masked_pred = {k: _mask_data(pred[k], mask) for k in self._loss_obj._prediction_keys}
+                masked_data = {k: _mask_data(assim_data[k], mask) for k in data.keys()}
 
                 if timestep_dropout:
                     # Same mask, to make the results comparable
                     masked_data["y"][timestep_mask] = torch.tensor(float("nan")).to(data["y"].device)
 
-                loss_after_update = self._loss_obj(masked_pred, masked_data)
+                loss_after_update, _ = self._loss_obj(masked_pred, masked_data)
 
                 # Verbose output: Calculates analysis loss on test data using results from this epoch. 
                 # This is to check whether assimilation is reducing loss on predict_last_n.
                 if verbose:
-                    test_assim_data = {k: v.detach().clone() for k, v in data.items()}
+                    test_assim_data = _detach_and_copy_data_dict(data)
                     test_assim_data['x_d'] = test_assim_data['x_d'][:, timestep + self.cfg.assimilation_window:, :]
                     test_assim_data['y'] = test_assim_data['y'][:, timestep + self.cfg.assimilation_window:, :]#[:, -1, :]
                     test_assim_data['c_n'] = pred['c_n'].detach().clone()
                     test_assim_data['h_n'] = pred['h_n'].detach().clone()
                     test_pred = model(test_assim_data)
-                    test_loss = self._loss_obj(test_pred, test_assim_data)
+                    test_loss, _ = self._loss_obj(test_pred, test_assim_data)
                     test_assim_nse = 1 - torch.mean((test_pred['y_hat'][test_mask,-1,:] - data['y'][test_mask,-1,:])**2) / torch.mean((data['y'][test_mask,-1,:] - torch.mean(data['y'][test_mask,-1,:]))**2)
                     print(timestep, epoch, no_da_test_loss.item(), initial_test_loss.item(), test_loss.item(), no_da_nse.item(), test_initial_nse.item(), test_assim_nse.item())
 
@@ -167,7 +234,7 @@ class Assimilation(object):
                 # if the loss is increasing rather than decreasing, reset the inputs to the previous state and reduce
                 # the learning rate
                 if initial_loss_value < loss_after_update:
-                    assim_data = {k: v.clone() for k, v in last_assim_data.items()}
+                    assim_data = _copy_data_dict(last_assim_data)
                     learning_rate = learning_rate * self.cfg.learning_rate_drop_factor
                     for param_group in optimizer.param_groups:
                         param_group["lr"] = learning_rate
@@ -179,7 +246,7 @@ class Assimilation(object):
                 else:
                     # store last "good" data so we can go back if loss increases on subsequent epoch
                     counter += 1
-                    last_assim_data = {k: v.detach().clone() for k, v in assim_data.items()}
+                    last_assim_data = _detach_and_copy_data_dict(assim_data)
 
                     # check the counter with the user defined constant learning rate step size and optionally reduce lr
                     if counter == self.cfg.learning_rate_epoch_drop:
@@ -209,19 +276,30 @@ class Assimilation(object):
         # assim_data['h_n'] = pred['h_n'].detach().clone()
         # test_pred = model(assim_data)
 
-        # add states of the last time step to the input data dictionary
-        assim_data = {k: v.detach().clone() for k, v in data.items()}
-        for var in model.state_var_names:
-            assim_data[var] = pred[var].detach().clone()
-        
         # finally, make predictions beyond the assimilation period
-        assim_data['x_d'] = data['x_d'][:, self._end_timestep:, :]
-        pred = model(assim_data)
+        seq_len = data['y'].shape[1]
+        if self._end_timestep < seq_len:
+            # add states of the last time step to the input data dictionary
+            assim_data = _detach_and_copy_data_dict(data)
+            for var in model.state_var_names:
+                assim_data[var] = pred[var].detach().clone()
+            
+            if isinstance(data['x_d'], dict):
+                assim_data['x_d'] = {
+                    k: v[:, self._end_timestep:, :]
+                    for k, v in data['x_d'].items()
+                }
+            else:
+                assim_data['x_d'] = data['x_d'][:, self._end_timestep:, :]
+            pred = model(assim_data)
+            y_hat_final = [pred["y_hat"]]
+            
+            # Final metric at the end of assimilation 
+            if verbose:
+                test_mask = ~torch.isnan(data["y"][:,-1,:]).any(-1)
+                test_assim_nse = 1 - torch.mean((pred['y_hat'][test_mask,-1,:] - data['y'][test_mask,-1,:])**2) / torch.mean((data['y'][test_mask,-1,:] - torch.mean(data['y'][test_mask,-1,:]))**2)
+                print(test_assim_nse)
+        else:
+            y_hat_final = []
 
-        # Final metric at the end of assimilation 
-        if verbose:
-            test_mask = ~torch.isnan(data["y"][:,-1,:]).any(-1)
-            test_assim_nse = 1 - torch.mean((pred['y_hat'][test_mask,-1,:] - data['y'][test_mask,-1,:])**2) / torch.mean((data['y'][test_mask,-1,:] - torch.mean(data['y'][test_mask,-1,:]))**2)
-            print(test_assim_nse)
-
-        return {'y_hat': torch.cat(y_hat + [pred["y_hat"]], 1)}
+        return {'y_hat': torch.cat(y_hat + y_hat_final, 1).detach()}

@@ -65,22 +65,7 @@ class Cache:
     byte_limit: int = 2 * 10**9  # in GB
 
 
-# class Config(BaseConfig):
-#         def __init__(self, yml_path_or_dict: Path | dict, dev_mode: bool = False):
-#         super(Config, self).__init__(yml_path_or_dict=yml_path_or_dict, dev_mode=dev_mode)
-#         if not (self._cfg.get('dev_mode', False) or dev_mode):
-#             self._check_cfg_keys(self._cfg)
-#         # Initialize AssimilationConfig if present in the YAML
-#         if ("assimilation_config" in self._cfg.keys()) and (self._cfg["assimilation_config"] is not None):
-#             self._assimilation_config = AssimilationConfig(self._cfg["assimilation_config"])
-#         else:
-#              self._assimilation_config = None
-    
-#     @property
-#     def assimilation_config(self) -> Optional[AssimilationConfig]:
-#         return self._assimilation_config
-    
-class Config(object):
+class Config(BaseConfig):
     """Read run configuration from the specified path or dictionary and parse it into a configuration object.
 
     During parsing, config keys that contain 'dir', 'file', or 'path' will be converted to pathlib.Path instances.
@@ -107,17 +92,20 @@ class Config(object):
     _metadata_keys = ['package_version', 'commit_hash']
 
     def __init__(self, yml_path_or_dict: Path | dict, dev_mode: bool = False):
-        if isinstance(yml_path_or_dict, Path):
-            self._cfg = Config._read_and_parse_config(yml_path=yml_path_or_dict)
-        elif isinstance(yml_path_or_dict, dict):
-            self._cfg = Config._parse_config(yml_path_or_dict)
-        else:
-            raise ValueError(
-                f'Cannot create a config from input of type {type(yml_path_or_dict)}.'
-            )
+        super(Config, self).__init__(yml_path_or_dict=yml_path_or_dict, dev_mode=dev_mode)
 
         if not (self._cfg.get('dev_mode', False) or dev_mode):
-            Config._check_cfg_keys(self._cfg)
+            self._check_cfg_keys(self._cfg)
+
+        # check if assimilation specifications are part of the config, if yes, create AssimilationConfig instance once
+        if ("assimilation_config" in self._cfg.keys()) and (self._cfg["assimilation_config"] is not None):
+            da_cfg = self._cfg["assimilation_config"]
+            for key in ["seq_length", "predict_last_n", "target_variables"]:
+                if key not in da_cfg and key in self._cfg:
+                    da_cfg[key] = self._cfg[key]
+            self._assimilation_config = AssimilationConfig(da_cfg)
+        else:
+             self._assimilation_config = None
 
         # Adjust experiment name
         if 'experiment_name' in self._cfg and self._cfg['experiment_name']:
@@ -148,16 +136,6 @@ class Config(object):
             new_name = re.sub(' ', '', new_name)
 
             self._cfg['experiment_name'] = new_name
-
-    def as_dict(self) -> dict:
-        """Return run configuration as dictionary.
-
-        Returns
-        -------
-        dict
-            The run configuration, as defined in the .yml file.
-        """
-        return self._cfg
 
     def dump_config(self, folder: Path, filename: str = 'config.yml'):
         """Save the run configuration as a .yml file to disk.
@@ -240,16 +218,14 @@ class Config(object):
 
         self._cfg.update(new_config.as_dict())
 
-    def _get_value_verbose(
-        self, key: str
-    ) -> float | int | str | list | dict | Path | pd.Timestamp:
-        """Use this function internally to return attributes of the config that are mandatory"""
-        if key not in self._cfg.keys():
-            raise ValueError(f'{key} is not specified in the config (.yml).')
-        elif self._cfg[key] is None:
-            raise ValueError(f"{key} is mandatory but 'None' in the config.")
+        if ("assimilation_config" in self._cfg.keys()) and (self._cfg["assimilation_config"] is not None):
+            da_cfg = self._cfg["assimilation_config"]
+            for key in ["seq_length", "predict_last_n", "target_variables"]:
+                if key not in da_cfg and key in self._cfg:
+                    da_cfg[key] = self._cfg[key]
+            self._assimilation_config = AssimilationConfig(da_cfg)
         else:
-            return self._cfg[key]
+            self._assimilation_config = None
 
     @staticmethod
     def _as_default_list(value: T | list[T] | None) -> list[T]:
@@ -329,18 +305,6 @@ class Config(object):
         # Add more config parsing if necessary
         return cfg
 
-    @staticmethod
-    def _read_and_parse_config(yml_path: Path):
-        if yml_path.exists():
-            with yml_path.open('r') as fp:
-                yaml = YAML(typ='safe')
-                cfg = yaml.load(fp)
-        else:
-            raise FileNotFoundError(yml_path)
-        cfg = Config._parse_config(cfg)
-
-        return cfg
-
     @property
     def detect_anomaly(self) -> bool:
         return self._cfg.get('detect_anomaly', False)
@@ -377,6 +341,10 @@ class Config(object):
     @inference_mode.setter
     def inference_mode(self, value: bool):
         self._cfg['inference_mode'] = value
+
+    @property
+    def assimilation_config(self) -> AssimilationConfig | None:
+        return self._assimilation_config
 
     @property
     def logging_level(self) -> int:
@@ -911,6 +879,26 @@ class Config(object):
             activation=activation,
             dropout=embedding_spec.get('dropout', 0.0),
         )
+
+    @property
+    def dynamic_inputs(self) -> list[str] | dict[str, list[str]]:
+        return self._get_value_verbose("dynamic_inputs")
+
+    @property
+    def autoregressive_inputs(self) -> list[str] | dict[str, list[str]]:
+        return self._as_default_list(self._cfg.get("autoregressive_inputs", []))
+
+    @property
+    def hydroatlas_attributes(self) -> list[str]:
+        return self._as_default_list(self._cfg.get("hydroatlas_attributes", []))
+
+    @property
+    def evolving_attributes(self) -> list[str]:
+        return self._as_default_list(self._cfg.get("evolving_attributes", []))
+
+    @property
+    def use_basin_id_encoding(self) -> bool:
+        return self._cfg.get("use_basin_id_encoding", False)
 
 
 def create_random_name():

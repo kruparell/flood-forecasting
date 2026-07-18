@@ -30,8 +30,9 @@ experiment_name: finetune-FINETUNE_BASIN
 
 # Where to save the fine-tuned model. Usually, we save it inside the base
 # model's directory to keep them organized together.
+# run_dir: ~/flood-forecasting/tutorial/model-runs/5-basin-example
 run_dir: ~/flood-forecasting/tutorial/model-runs/5-basin-example
-
+dynamics_data_dir: /usr/local/google/home/kruparell/Caravans_MultiMet
 
 # --- 2. Data & Basins ---------------------------------------------------------
 # Defines the specific data used for this fine-tuning run.
