@@ -11,7 +11,7 @@ dataset: multimet
 detect_anomaly: false
 device: cpu
 dynamics_data_dir: gs:/caravan-multimet/v1.1
-epochs: 15
+epochs: 2
 experiment_name: 5-basin-example
 forecast_embedding:
   type: fc
