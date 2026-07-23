@@ -19,11 +19,10 @@ from googlehydrology.modelzoo.handoff_forecast_lstm import HandoffForecastLSTM
 from googlehydrology.modelzoo.mean_embedding_forecast_lstm import (
     MeanEmbeddingForecastLSTM,
 )
-from googlehydrology.modelzoo.ealstm import EALSTM
 from googlehydrology.modelzoo.arlstm import ARLSTM
 from googlehydrology.utils.config import Config
 
-ASSIMILATION_MODELS = ['arlstm']
+ASSIMILATION_MODELS = ['arlstm', 'mean_embedding_forecast_lstm']
 
 
 def get_model(cfg: Config) -> nn.Module:

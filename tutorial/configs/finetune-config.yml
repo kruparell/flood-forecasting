@@ -47,7 +47,7 @@ validation_basin_file: ~/flood-forecasting/tutorial/basin-lists/FINETUNE_BASIN.t
 test_basin_file: ~/flood-forecasting/tutorial/basin-lists/8-basin-test.txt
 
 # Path to the observation data (streamflow targets).
-targets_data_dir: ~/flood-forecasting/tutorial/Caravan-nc
+targets_data_dir: /usr/local/google/home/kruparell/Caravans/Caravan-nc
 
 
 # --- 3. Fine-Tuning Strategy --------------------------------------------------
@@ -96,7 +96,7 @@ learning_rate_epochs_drop: 5     # ... every 5 epochs.
 # Number of samples processed at once.
 batch_size: 256
 # Number of passes through the (small) fine-tuning dataset.
-epochs: 25
+epochs: 2
 # Maximum number of weight updates per epoch (useful for very large datasets).
 # Leave empty to use all training data for each epoch.
 max_updates_per_epoch: -1 

@@ -1,0 +1,18 @@
+{
+  "entries": [
+    {
+      "path": "google3/learning/gemini/agents/skills",
+      "include_only": [
+        "colab",
+        "blaze",
+        "auto_repair",
+        "sponge",
+        "unit_test",
+        "analog",
+        "sherlog",
+        "rpc_debug",
+        "vcs"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+base_run_dir: /usr/local/google/home/kruparell/flood-forecasting/tutorial/model-runs/generic-meanembedding-50basin_2107_080323
+batch_size: 256
+dynamics_data_dir: /usr/local/google/home/kruparell/Caravans_MultiMet
+epochs: 2
+experiment_name: finetune-50basin
+finetune_modules:
+- static_embedding_fc
+- head
+initial_learning_rate: 0.005
+learning_rate_drop_factor: 0.9
+learning_rate_epochs_drop: 5
+learning_rate_strategy: StepLR
+max_updates_per_epoch: 50
+metrics:
+- NSE
+- KGE
+run_dir: /usr/local/google/home/kruparell/flood-forecasting/tutorial/model-runs/generic-meanembedding-50basin_2107_080323
+targets_data_dir: /usr/local/google/home/kruparell/Caravans/Caravan-nc
+test_basin_file: /usr/local/google/home/kruparell/flood-forecasting/tutorial/basin-lists/50-basin-train.txt
+train_basin_file: /usr/local/google/home/kruparell/flood-forecasting/tutorial/basin-lists/50-basin-train.txt
+validate_every: 1
+validate_n_random_basins: -1
+validation_basin_file: /usr/local/google/home/kruparell/flood-forecasting/tutorial/basin-lists/50-basin-train.txt

@@ -1,31 +1,23 @@
-import math
-from collections import defaultdict
+"""Autoregressive LSTM (AR-LSTM) with Mean Embedding for dynamic hydrological inputs."""
 
 import re
-from typing import Dict, List
+from typing import Any, Dict, Tuple
 
 import torch
 import torch.nn as nn
 
-from googlehydrology.modelzoo.basemodel import BaseModel
-from googlehydrology.modelzoo.inputlayer import InputLayer
 from googlehydrology.modelzoo.head import get_head
+from googlehydrology.modelzoo.mean_embedding_forecast_lstm import (
+    ConfigData,
+    ForwardData,
+    MeanEmbeddingForecastLSTM,
+)
 from googlehydrology.utils.config import Config
 
-# TODO Change ARLSTM to use mean_embedding_lstm as the base, and build from that
-class ARLSTM(BaseModel):
-    """An autoregressive LSTM.
 
-    This model assumes that the *last* entry in dynamic inpus (x_d) is an observation that is supposed to match
-    target data lagged by an integer number of timesteps. If this data is missing (NaN), it is substituted 
-    for the model prediction at the same lag. The model adds an extra dynamic input that serves as a binary 
-    flag to indicate whether the autoregressive input at a particular timestep is from observation vs. simulation.
+class ARLSTM(MeanEmbeddingForecastLSTM):
+    """Autoregressive LSTM model with Mean Embedding for hydrological forecasting."""
 
-    Parameters
-    ----------
-    cfg : Config
-        The run configuration.
-    """
     state_var_names = ['h_n', 'c_n']
 
     def __init__(self, cfg: Config):
@@ -34,119 +26,151 @@ class ARLSTM(BaseModel):
         self._ar_shift = self._get_ar_shift()
         self._num_ar_inputs = len(self.cfg.autoregressive_inputs)
         if self.output_size != self._num_ar_inputs:
-            raise ValueError('The AR-LSTM currently only works if all outputs are used as lagged inputs.')
+            raise ValueError('The AR-LSTM requires output_size to match the number of autoregressive inputs.')
 
-        self.embedding_net = InputLayer(cfg)
-
-        # increase input size for binary flag
-        input_size = self.embedding_net.output_size + self._num_ar_inputs
-        self.cell = nn.LSTM(input_size=input_size, hidden_size=cfg.hidden_size)
-
-        self.dropout = nn.Dropout(p=cfg.output_dropout)
-
+        input_size = (
+            self.static_embedding_fc.output_size
+            + self.config_data.hindcast_embedding.hiddens[-1]
+            + 2 * self._num_ar_inputs
+        )
+        self.hindcast_lstm = nn.LSTM(
+            input_size=input_size,
+            hidden_size=self.config_data.hidden_size,
+            batch_first=True,
+        )
+        self.cell = self.hindcast_lstm
         self.head = get_head(cfg=cfg, n_in=cfg.hidden_size, n_out=self.output_size)
-
         self._reset_parameters()
+
+    def load_state_dict(self, state_dict: dict, strict: bool = True, assign: bool = False):
+        state_dict_copy = state_dict.copy()
+        for k in [k for k in state_dict_copy if 'forecast_lstm' in k]:
+            del state_dict_copy[k]
+        if hasattr(self, 'forecast_lstm'):
+            del self.forecast_lstm
+        return super().load_state_dict(state_dict_copy, strict=False, assign=assign)
 
     def _get_ar_shift(self) -> int:
         shifts = set()
-        for input in self.cfg.autoregressive_inputs:
-            capture = re.compile(r'^(.*)_shift(\d+)$').search(input)
+        for inp in self.cfg.autoregressive_inputs:
+            capture = re.search(r'^(.*)_shift(\d+)$', inp)
             if not capture:
-                raise ValueError('Autoregressive inputs must be a shifted variable with form <variable>_shift<lag> ',
-                                f'where <lag> is an integer. Instead got: {input}.')
-            if not capture[1] in self.cfg.target_variables:
-                raise ValueError('Autoregressive inputs must be a shifted target variable. ',
-                                f'Instead got a shifted version of: {capture[1]}.')
+                raise ValueError(f"Autoregressive inputs must follow <var>_shift<lag>, got: {inp}")
+            if capture[1] not in self.cfg.target_variables:
+                raise ValueError(f"Autoregressive inputs must be shifted target variables, got: {capture[1]}")
             shifts.add(int(capture[2]))
         if len(shifts) > 1:
-            raise ValueError('Only one AR shift is allowed currently. All autoregressive inputs must use the same shift.')
-        shift = shifts.pop()
+            raise ValueError('All autoregressive inputs must use the same lag shift.')
+        shift = shifts.pop() if shifts else 1
         if shift <= 0:
             raise ValueError('Autoregressive inputs must be shifted by at least one timestep.')
-        return shift    
-    
+        return shift
+
     def _reset_parameters(self):
-        """Special initialization of certain model weights."""
         if self.cfg.initial_forget_bias is not None:
-            self.cell.bias_hh_l0.data[self.cfg.hidden_size:2 * self.cfg.hidden_size] = self.cfg.initial_forget_bias
+            self.hindcast_lstm.bias_hh_l0.data[
+                self.cfg.hidden_size : 2 * self.cfg.hidden_size
+            ] = self.cfg.initial_forget_bias
 
-    def forward(self,
-                data: Dict[str, torch.Tensor],
-                h_0: torch.Tensor = None,
-                c_0: torch.Tensor = None) -> Dict[str, torch.Tensor]:
-        """Perform a forward pass on the Autoregressive LSTM model.
+    def pre_model_hook(self, data: dict[str, torch.Tensor], is_train: bool) -> dict[str, torch.Tensor]:
+        """Pre-processes input batches, creating shifted autoregressive observations when needed."""
+        data = super().pre_model_hook(data, is_train=is_train)
+        if 'y' in data and self.cfg.autoregressive_inputs:
+            y = data['y']
+            x_d = data.get('x_d', data.get('x_d_hindcast', None))
+            if isinstance(x_d, dict):
+                for ar_name in self.cfg.autoregressive_inputs:
+                    capture = re.search(r'^(.*)_shift(\d+)$', ar_name)
+                    if capture:
+                        shift, var_base = int(capture[2]), capture[1]
+                        if ar_name not in x_d or (isinstance(x_d[ar_name], torch.Tensor) and torch.equal(x_d[ar_name], y)):
+                            y_shifted = torch.roll(y, shifts=shift, dims=1)
+                            y_shifted[:, :shift, :] = float('nan')
 
-        Parameters
-        ----------
-        data : Dict[str, torch.Tensor]
-            Dictionary, containing input features as key-value pairs.
+                            mean_key, std_key = f"{var_base}_mean", f"{var_base}_std"
+                            if mean_key in data and std_key in data:
+                                y_shifted = (y_shifted - data[mean_key]) / data[std_key]
+                            elif 'scaler_mean' in data and 'scaler_std' in data:
+                                y_shifted = (y_shifted - data['scaler_mean']) / data['scaler_std']
+                            x_d[ar_name] = y_shifted
+        return data
 
-        Returns
-        -------
-        Dict[str, torch.Tensor]
-            Model outputs and intermediate states as a dictionary.
-                - `y_hat`: model predictions of shape [batch size, sequence length, number of target variables].
-                - `lstm_output`: full timeseries of the hidden states from the lstm [batch size, sequence length, hidden size].
-                - `h_n`: hidden state at the last time step of the sequence of shape [batch size, 1, hidden size].
-                - `c_n`: cell state at the last time step of the sequence of shape [batch size, 1, hidden size].
-        """
-        # possibly pass dynamic and static inputs through embedding layers, then concatenate them
-        x_d = self.embedding_net(data)
+    def _get_forward_data(self, data: Dict[str, Any]) -> Tuple[ForwardData, torch.Tensor]:
+        static_features = data['x_s']
+        if 'x_one_hot' in data:
+            static_features = torch.cat([static_features, data['x_one_hot']], dim=-1)
 
-        _, batch_size, _ = x_d.size()
+        hindcast_dict = data['x_d_hindcast'] if 'x_d_hindcast' in data else data['x_d']
+        if isinstance(hindcast_dict, dict):
+            x_ar = torch.cat([hindcast_dict[ar] for ar in self.cfg.autoregressive_inputs], dim=-1)
+            cleaned = {'x_s': static_features, 'x_d_hindcast': hindcast_dict}
+            if 'x_d_forecast' in data:
+                cleaned['x_d_forecast'] = data['x_d_forecast']
+            forward_data = ForwardData.from_forward_data(cleaned, self.config_data)
+        else:
+            x_d = hindcast_dict
+            if x_d.ndim == 3 and x_d.shape[0] != static_features.shape[0]:
+                x_d = x_d.transpose(0, 1)
+            x_ar = x_d[:, :, -self._num_ar_inputs:]
+            forward_data = ForwardData(
+                static_features=static_features,
+                hindcast_features={'default': x_d[:, :, :-self._num_ar_inputs]},
+                forecast_features={},
+            )
+        return forward_data, x_ar
+
+    def forward(self, data: Dict[str, Any], h_0: torch.Tensor = None, c_0: torch.Tensor = None) -> Dict[str, torch.Tensor]:
+        """Perform forward unroll with autoregressive feedback."""
+        forward_data, x_ar = self._get_forward_data(data)
+        static_embedding = self._calc_static_embedding(forward_data)
+        target_len = list(forward_data.hindcast_features.values())[0].shape[1] if forward_data.hindcast_features else (
+            list(forward_data.forecast_features.values())[0].shape[1] if forward_data.forecast_features else forward_data.static_features.shape[0]
+        )
+
+        hindcast_embeddings = [
+            self._calc_dynamic_embedding(fc, forward_data.hindcast_features[name], static_embedding, target_len)
+            for name, fc in self.hindcast_embeddings_fc.items()
+        ]
+        shared_embeddings = [
+            self._calc_dynamic_embedding(fc, forward_data.forecast_features[name], static_embedding, target_len)
+            for name, fc in self.shared_embeddings_fc.items()
+        ]
+        all_embeddings = hindcast_embeddings + shared_embeddings
+        masked_mean = self._masked_mean(all_embeddings) if all_embeddings else x_ar.new_zeros((x_ar.shape[0], x_ar.shape[1], 0))
+
+        embedded_inputs = self._append_static_embedding(masked_mean, static_embedding)
+        batch_size, seq_len = x_ar.shape[0], x_ar.shape[1]
 
         if h_0 is None:
-            if 'h_n' in data.keys():
-                h_0 = data['h_n'].transpose(0, 1)
-            else:
-                h_0 = x_d.new_zeros((1, batch_size, self.cfg.hidden_size))
+            h_0 = data['h_n'].transpose(0, 1) if 'h_n' in data else embedded_inputs.new_zeros((1, batch_size, self.cfg.hidden_size))
         if c_0 is None:
-            if 'c_n' in data.keys():
-                c_0 = data['c_n'].transpose(0, 1)
-            else:
-                c_0 = x_d.new_zeros((1, batch_size, self.cfg.hidden_size))
+            c_0 = data['c_n'].transpose(0, 1) if 'c_n' in data else embedded_inputs.new_zeros((1, batch_size, self.cfg.hidden_size))
 
-        # initialize flags for autoregressive inputs -- all flags start at 0, indicating obs
-        # flags are appended as the last input
-        ar_flags = x_d.new_zeros((batch_size, self._num_ar_inputs))
-        
-        # initialize the 'last' prediction to substitute for any missing AR values in the first timesteps
-        last_prediction = x_d.new_zeros((self._ar_shift, batch_size, self.output_size))
+        ar_flags = embedded_inputs.new_zeros((batch_size, self._num_ar_inputs))
+        last_prediction = embedded_inputs.new_zeros((self._ar_shift, batch_size, self.output_size))
 
-        # initialize dictionary to store the output
-        lstm_output = []
-        y_hat = []
+        lstm_output, y_hat = [], []
+        for t in range(seq_len):
+            emb_t = embedded_inputs[:, t, :]
+            x_ar_t = x_ar[:, t, :].clone()
 
-        # manually loop through timesteps
-        for x_t in x_d:
-
-            # find locations of missing data (NaN's) and replace with last predictions
-            x_embd = x_t[:, :-self._num_ar_inputs]
-            x_ar = x_t[:, -self._num_ar_inputs:].clone()
-            replace_indexes = torch.isnan(x_ar)
-            x_ar[replace_indexes] = last_prediction[-1, replace_indexes]
+            replace_idx = torch.isnan(x_ar_t)
+            x_ar_t[replace_idx] = last_prediction[-1, replace_idx]
             ar_flags[:, :] = 0
-            ar_flags[replace_indexes] = 1
+            ar_flags[replace_idx] = 1
 
-            # one timestep of lstm
-            cell_inputs = torch.unsqueeze(torch.concat([x_embd, x_ar, ar_flags], -1), 0)
-            cell_output, (h_0, c_0) = self.cell(cell_inputs, (h_0, c_0))
+            cell_in = torch.cat([emb_t, x_ar_t, ar_flags], dim=-1).unsqueeze(1)
+            cell_out, (h_0, c_0) = self.hindcast_lstm(cell_in, (h_0, c_0))
+            lstm_output.append(cell_out)
 
-            # append all timestep output to the output dictionary
-            lstm_output.append(cell_output.transpose(0, 1))
+            pred = self.head(self.dropout(cell_out))['y_hat'].squeeze(1)
+            last_prediction[1:] = last_prediction[:-1].clone()
+            last_prediction[0] = pred
+            y_hat.append(pred)
 
-            # store the last prediction
-            last_prediction[1:] = last_prediction[:-1,].clone()
-            prediction = torch.squeeze(self.head(self.dropout(h_0.transpose(0, 1)))['y_hat'], dim=1)
-            last_prediction[0] = prediction
-            y_hat.append(prediction)
-
-        # stack all ouptuts to sizes in function doc
-        pred = {
-            'lstm_output': torch.concat(lstm_output, 1), 
-            'h_n': h_0.transpose(0, 1), 
+        return {
+            'lstm_output': torch.cat(lstm_output, dim=1),
+            'h_n': h_0.transpose(0, 1),
             'c_n': c_0.transpose(0, 1),
-            'y_hat': torch.stack(y_hat, 1),
+            'y_hat': torch.stack(y_hat, dim=1),
         }
-        return pred

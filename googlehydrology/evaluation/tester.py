@@ -165,9 +165,10 @@ class BaseTester(object):
         weight_file = self._get_weight_file(epoch)
 
         LOGGER.info(f'Using the model weights from {weight_file}')
-        self.model.load_state_dict(
-            torch.load(weight_file, map_location=self.device, weights_only=True)
-        )
+        sd = torch.load(weight_file, map_location=self.device, weights_only=True)
+        model_sd = self.model.state_dict()
+        sd = {k: v for k, v in sd.items() if k not in model_sd or v.shape == model_sd[k].shape}
+        self.model.load_state_dict(sd, strict=False)
 
     def _get_dataset_all(self) -> Dataset:
         """Get dataset for all basins."""
@@ -830,8 +831,12 @@ class RegressionTester(BaseTester):
     def _create_xarray_data_vars(self, y_hat: np.ndarray, y: np.ndarray):
         data = {}
         for i, var in enumerate(self.cfg.target_variables):
-            data[f'{var}_obs'] = (('date', 'time_step'), y[:, :, i])
-            data[f'{var}_sim'] = (('date', 'time_step'), y_hat[:, :, i])
+            if y_hat.ndim == 3 and y_hat.shape[1] == 1 and y_hat.shape[2] > 1:
+                data[f'{var}_obs'] = (('date', 'time_step'), y[:, 0, :])
+                data[f'{var}_sim'] = (('date', 'time_step'), y_hat[:, 0, :])
+            else:
+                data[f'{var}_obs'] = (('date', 'time_step'), y[:, :, i])
+                data[f'{var}_sim'] = (('date', 'time_step'), y_hat[:, :, i])
         return data
 
     def _get_plots(self, qobs: np.ndarray, qsim: np.ndarray, title: str):

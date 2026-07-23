@@ -272,9 +272,13 @@ class MaskedMSELoss(BaseLoss):
         ground_truth: dict[str, torch.Tensor],
         **kwargs,
     ):
-        mask = ~torch.isnan(ground_truth['y'])
+        pred_y = prediction['y_hat']
+        gt_y = ground_truth['y']
+        if pred_y.shape[1] != gt_y.shape[1]:
+            gt_y = gt_y[:, -pred_y.shape[1]:, :]
+        mask = ~torch.isnan(gt_y)
         loss = 0.5 * torch.mean(
-            (prediction['y_hat'][mask] - ground_truth['y'][mask]) ** 2
+            (pred_y[mask] - gt_y[mask]) ** 2
         )
         return loss
 
@@ -302,11 +306,15 @@ class MaskedRMSELoss(BaseLoss):
         ground_truth: dict[str, torch.Tensor],
         **kwargs,
     ):
-        mask = ~torch.isnan(ground_truth['y'])
+        pred_y = prediction['y_hat']
+        gt_y = ground_truth['y']
+        if pred_y.shape[1] != gt_y.shape[1]:
+            gt_y = gt_y[:, -pred_y.shape[1]:, :]
+        mask = ~torch.isnan(gt_y)
         loss = torch.sqrt(
             0.5
             * torch.mean(
-                (prediction['y_hat'][mask] - ground_truth['y'][mask]) ** 2
+                (pred_y[mask] - gt_y[mask]) ** 2
             )
         )
         return loss

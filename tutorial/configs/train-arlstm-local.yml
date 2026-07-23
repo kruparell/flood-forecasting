@@ -31,8 +31,8 @@ train_basin_file: /usr/local/google/home/kruparell/flood-forecasting/tutorial/ba
 validation_basin_file: /usr/local/google/home/kruparell/flood-forecasting/tutorial/basin-lists/5-basin-train.txt
 test_basin_file: /usr/local/google/home/kruparell/flood-forecasting/tutorial/basin-lists/8-basin-test.txt
 
-targets_data_dir: /usr/local/google/home/kruparell/flood-forecasting/tutorial/Caravan-nc
-statics_data_dir: /usr/local/google/home/kruparell/flood-forecasting/tutorial/Caravan-nc
+targets_data_dir: /usr/local/google/home/kruparell/Caravans/Caravan-nc
+statics_data_dir: /usr/local/google/home/kruparell/Caravans/Caravan-nc
 dynamics_data_dir: /usr/local/google/home/kruparell/Caravans_MultiMet
 
 load_as_csv: False
@@ -125,7 +125,7 @@ seed: 42
 loss: MSE
 optimizer: Adam
 
-epochs: 5
+epochs: 2
 batch_size: 256
 max_updates_per_epoch: 100
 

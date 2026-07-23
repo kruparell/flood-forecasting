@@ -62,7 +62,7 @@ def sample_pointpredictions(
     if model.cfg.head.lower() == 'cmal':
         samples = sample_cmal(model, data, n_samples, scaler, outputs=outputs)
     elif model.cfg.head.lower() == 'cmal_deterministic':
-        samples = sample_cmal_deterministic(model, data, outputs=outputs)
+        samples = sample_cmal_deterministic(model, data, scaler=scaler, outputs=outputs)
     elif model.cfg.head.lower() == 'regression':  # regression head assumes mcd
         assert not outputs, 'regression self creates outputs'
         samples = sample_mcd(model, data, n_samples, scaler)
@@ -362,6 +362,7 @@ def sample_mcd(
 def sample_cmal_deterministic(
     model: 'BaseModel',
     data: dict[str, torch.Tensor],
+    scaler: Scaler | None = None,
     *,
     outputs: dict[str, torch.Tensor] | None = None,
 ) -> dict[str, torch.Tensor]:
@@ -376,6 +377,8 @@ def sample_cmal_deterministic(
         A model with a CMAL head.
     data : dict[str, torch.Tensor]
         Dictionary, containing input features as key-value pairs.
+    scaler : Scaler, optional
+        Scaler of the run.
     outputs, optional
         Model forward result
 
@@ -399,6 +402,13 @@ def sample_cmal_deterministic(
     # Map output frequencies to final sample tensors:
     samples = {}
 
+    normalized_zeros = _calc_normalized_zero_thresholds(
+        scaler=scaler,
+        targets=setup.cfg.target_variables,
+        device=next(model.parameters()).device,
+        dtype=next(model.parameters()).dtype,
+    )
+
     # Loop over all model output frequencies (e.g., 'daily', 'hourly').
     for freq_suffix in setup.freq_suffixes:
         mu = pred[f'mu{freq_suffix}']  # means
@@ -406,9 +416,13 @@ def sample_cmal_deterministic(
         tau = pred[f'tau{freq_suffix}']  # asymmetries
         pi = pred[f'pi{freq_suffix}']  # weights
 
-        sample_points = [
-            cmal_deterministic.generate_predictions(mu, b, tau, pi)
-        ]
+        pred_vals = cmal_deterministic.generate_predictions(mu, b, tau, pi)
+        if setup.cfg.negative_sample_handling:
+            norm_zero = normalized_zeros[0] if normalized_zeros else torch.tensor(0.0, device=pred_vals.device)
+            if (setup.cfg.negative_sample_handling or '').lower() == 'clip':
+                pred_vals = torch.clamp(pred_vals, min=norm_zero)
+
+        sample_points = [pred_vals]
         samples[f'y_hat{freq_suffix}'] = torch.stack(sample_points, 2)
 
     return samples

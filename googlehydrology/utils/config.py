@@ -100,7 +100,9 @@ class Config(BaseConfig):
         # check if assimilation specifications are part of the config, if yes, create AssimilationConfig instance once
         if ("assimilation_config" in self._cfg.keys()) and (self._cfg["assimilation_config"] is not None):
             da_cfg = self._cfg["assimilation_config"]
-            for key in ["seq_length", "predict_last_n", "target_variables"]:
+            if "predict_last_n" not in da_cfg:
+                da_cfg["predict_last_n"] = self.predict_last_n
+            for key in ["seq_length", "target_variables"]:
                 if key not in da_cfg and key in self._cfg:
                     da_cfg[key] = self._cfg[key]
             self._assimilation_config = AssimilationConfig(da_cfg)
@@ -675,8 +677,17 @@ class Config(BaseConfig):
         return max(1, value or 1)
 
     @property
+    def predict_n_hindcast(self) -> int:
+        return self._cfg.get('predict_n_hindcast', 0)
+
+    @property
     def predict_last_n(self) -> int | dict[str, int]:
-        return self._get_value_verbose('predict_last_n')
+        if 'predict_n_hindcast' in self._cfg and self._cfg['predict_n_hindcast'] > 0:
+            lead_time = self._cfg.get('lead_time', 0)
+            return lead_time + self._cfg['predict_n_hindcast']
+        if 'predict_last_n' in self._cfg:
+            return self._cfg['predict_last_n']
+        return self._cfg.get('lead_time', 1)
 
     @property
     def regularization(self) -> list[str | tuple[str, float]]:

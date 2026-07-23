@@ -54,9 +54,9 @@ validation_basin_file: ~/flood-forecasting/tutorial/basin-lists/5-basin-train.tx
 test_basin_file: ~/flood-forecasting/tutorial/basin-lists/8-basin-test.txt
 
 # Directory containing the target data (streamflow observations).
-targets_data_dir: ~/flood-forecasting/tutorial/Caravan-nc
+targets_data_dir: /usr/local/google/home/kruparell/Caravans/Caravan-nc
 # Directory containing static catchment attributes (e.g., area, elevation).
-statics_data_dir: ~/flood-forecasting/tutorial/Caravan-nc
+statics_data_dir: /usr/local/google/home/kruparell/Caravans/Caravan-nc
 # Directory containing dynamic meteorological forcing data (rain, temp, etc.).
 # 'gs://' indicates data is streamed directly from Google Cloud Storage.
 # dynamics_data_dir: gs://caravan-multimet/v1.1
