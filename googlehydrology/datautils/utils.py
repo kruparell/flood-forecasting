@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import functools
 import re
 from collections import defaultdict
@@ -22,6 +23,8 @@ import pandas as pd
 from pandas.tseries.frequencies import to_offset
 from xarray.core.dataarray import DataArray
 from xarray.core.dataset import Dataset
+
+from googlehydrology.utils.gfile_utils import get_gfile
 
 # Pandas switched from "Y" to "YE" and similar identifiers in 2.2.0. This snippet checks which one is correct for the
 # current pandas installation.
@@ -56,8 +59,36 @@ def load_basin_file(basin_file: Path) -> list[str]:
     ValueError
         In case of invalid basin names that would cause problems internally.
     """
-    with basin_file.open('r') as fp:
-        basins = sorted(basin.strip() for basin in fp if basin.strip())
+    file_path_str = str(basin_file)
+    if file_path_str.startswith('/cns/'):
+        gfile = get_gfile()
+        if gfile:
+            with gfile.GFile(file_path_str, 'r') as fp:
+                basins = sorted(
+                    (basin.decode('utf-8') if isinstance(basin, bytes) else basin).strip()
+                    for basin in fp if basin.strip()
+                )
+        else:
+            filename = os.path.basename(file_path_str)
+            local_fallbacks = [
+                Path(file_path_str),
+                Path.cwd() / filename,
+                Path(__file__).parent.parent / filename,
+                Path("/usr/local/google/home/kruparell/arlstm_eval_model_10epoch") / filename,
+                Path("/usr/local/google/home/kruparell/arlstm_eval_model") / filename,
+            ]
+            found = False
+            for fb in local_fallbacks:
+                if fb.exists():
+                    with fb.open('r') as fp:
+                        basins = sorted(basin.strip() for basin in fp if basin.strip())
+                    found = True
+                    break
+            if not found:
+                raise RuntimeError(f'gfile is not available to read CNS path: {file_path_str}')
+    else:
+        with basin_file.open('r') as fp:
+            basins = sorted(basin.strip() for basin in fp if basin.strip())
 
     # sanity check basin names
     problematic_basins = [

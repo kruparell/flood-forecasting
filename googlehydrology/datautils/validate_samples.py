@@ -205,6 +205,12 @@ def validate_samples(
     # It's equiv to taking all basins, copying and stacking them, then ANDing them.
     masks.append((all_basins & is_date_valid).rename('dates'))
 
+    # Ensure any valid sample has at least seq_length - 1 timesteps of lookback history available in dataset
+    if seq_length and seq_length > 1:
+        valid_seq_mask = xr.ones_like(dataset.date, dtype=bool).copy()
+        valid_seq_mask[: seq_length - 1] = False
+        masks.append((all_basins & valid_seq_mask).rename('seq_lookback'))
+
     LOGGER.debug('valid_sample_mask')
     # masks is a mix of 1d (static) and 2d features' bool masks.
     # we merge them by lazily apply (&) each mask so objects stay small.

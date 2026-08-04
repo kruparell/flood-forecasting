@@ -54,6 +54,6 @@ def get_model(cfg: Config) -> nn.Module:
             f'{cfg.model} not implemented or not linked in `get_model()`'
         )
 
-    if cfg.compile:
+    if cfg.compile and torch.cuda.is_available():
         return torch.compile(model, mode='max-autotune')
     return model

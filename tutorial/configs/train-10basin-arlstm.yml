@@ -1,23 +1,9 @@
-# Copyright 2025 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 # ==============================================================================
-# GoogleHydrology Tutorial Configuration File (AR-LSTM Local Version)
+# GoogleHydrology Tutorial Configuration File (AR-LSTM 10-Basin Local Version)
 # ==============================================================================
 
 # --- 1. General Experiment Settings -------------------------------------------
-experiment_name: arlstm-local-example
+experiment_name: arlstm-10basin-real
 run_dir: /usr/local/google/home/kruparell/flood-forecasting/tutorial/model-runs/
 logging_level: INFO
 detect_anomaly: False
@@ -28,9 +14,9 @@ dev_mode: True
 dataset: multimet
 
 # File Paths
-train_basin_file: /usr/local/google/home/kruparell/flood-forecasting/tutorial/basin-lists/5-basin-train.txt
-validation_basin_file: /usr/local/google/home/kruparell/flood-forecasting/tutorial/basin-lists/5-basin-train.txt
-test_basin_file: /usr/local/google/home/kruparell/flood-forecasting/tutorial/basin-lists/8-basin-test.txt
+train_basin_file: /usr/local/google/home/kruparell/flood-forecasting/tutorial/basin-lists/10-basin-train.txt
+validation_basin_file: /usr/local/google/home/kruparell/flood-forecasting/tutorial/basin-lists/10-basin-train.txt
+test_basin_file: /usr/local/google/home/kruparell/flood-forecasting/tutorial/basin-lists/10-basin-test.txt
 
 targets_data_dir: /usr/local/google/home/kruparell/Caravans/Caravan-nc
 statics_data_dir: /usr/local/google/home/kruparell/Caravans/Caravan-nc
@@ -63,7 +49,7 @@ forecast_inputs: {}
 autoregressive_inputs:
   - streamflow_shift1
 
-# dynamic_inputs (do not include AR inputs here, they are added automatically)
+# dynamic_inputs
 dynamic_inputs:
   - hres_temperature_2m
   - hres_total_precipitation
@@ -100,12 +86,9 @@ timestep_counter: True
 # -- Dropout --
 output_dropout: 0.0
 
-# Mask 0% of AR observations at random (100% provided)
+# Mask 0% of AR observations at random (100% provided during training)
 random_holdout_from_dynamic_features:
   streamflow_shift1:
-    missing_fraction: 0.0
-    mean_missing_length: 1
-  QObs(mm/d)_shift1:
     missing_fraction: 0.0
     mean_missing_length: 1
 
@@ -135,12 +118,10 @@ seed: 42
 loss: MSE
 optimizer: Adam
 
-epochs: 5
+epochs: 2
 batch_size: 16
-max_updates_per_epoch: 100
+max_updates_per_epoch: 25
 save_weights_every: 1
-
-
 
 # -- Learning Rate Scheduler --
 learning_rate: 0.02

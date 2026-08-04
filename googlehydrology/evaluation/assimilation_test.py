@@ -32,17 +32,17 @@ class AssimilationTest(unittest.TestCase):
     def test_check_discharge_timing_correct_alignment(self):
         seq_len = 365
         dates = pd.date_range(start='2020-01-01', periods=seq_len, freq='D').strftime('%Y-%m-%d').values
-        
+
         y = torch.arange(seq_len, dtype=torch.float32).unsqueeze(0).unsqueeze(-1)
         y_shift1 = torch.roll(y, shifts=1, dims=1)
         y_shift1[0, 0, 0] = float('nan')
-        
+
         data = {
             'date': np.tile(dates, (1, 1)),
             'y': y,
             'x_d': {'streamflow_shift1': y_shift1}
         }
-        
+
         diag = self.assimilation.check_discharge_timing(data, verbose=False)
         self.assertFalse(diag['has_timing_mismatch'])
         self.assertEqual(len(diag['warnings']), 0)
@@ -51,20 +51,19 @@ class AssimilationTest(unittest.TestCase):
     def test_check_discharge_timing_same_day_mismatch(self):
         seq_len = 365
         dates = pd.date_range(start='2020-01-01', periods=seq_len, freq='D').strftime('%Y-%m-%d').values
-        
+
         y = torch.arange(seq_len, dtype=torch.float32).unsqueeze(0).unsqueeze(-1)
-        
+
         data = {
             'date': np.tile(dates, (1, 1)),
             'y': y,
             'x_d': {'streamflow_shift1': y}
         }
-        
+
         diag = self.assimilation.check_discharge_timing(data, verbose=False)
         self.assertTrue(diag['has_timing_mismatch'])
         self.assertGreater(len(diag['warnings']), 0)
         self.assertIn("TIMING MISMATCH DETECTED", diag['warnings'][0])
-
 
     def test_cell_state_only_gradient_update(self):
         class MockLSTMModel(torch.nn.Module):
@@ -103,30 +102,6 @@ class AssimilationTest(unittest.TestCase):
         da = res['y_hat']
         self.assertGreater((da - base).abs().max().item(), 0.1)
 
-    def test_assimilate_modifies_forecast_predictions(self):
-        class WindowedModel(torch.nn.Module):
-            state_var_names = ['c_n', 'h_n']
-            def __init__(self):
-                super().__init__()
-                self.fc = torch.nn.Linear(8, 1)
-            def forward(self, data):
-                c_n = data.get('c_n', torch.zeros(1, 1, 8))
-                y_hat = self.fc(c_n).expand(1, 12, 1)
-                return {'y_hat': y_hat, 'c_n': c_n, 'h_n': torch.zeros_like(c_n)}
-
-        cfg_dict = {
-            'seq_length': 365,
-            'history': 10,
-            'assimilation_window': 1,
-            'assimilation_lead_time': 0,
-            'learning_rate': 0.05,
-            'epochs': 5,
-            'loss': 'MSE',
-            'optimizer': 'Adam',
-            'assimilation_targets': ['c_n'],
-            'target_variables': ['streamflow'],
-            'predict_last_n': 1,
-        }
     def test_hindcast_5day_gradient_enforcement(self):
         """Verifies that cell-state gradient descent is computed strictly on the 5 hindcast days."""
         class MockForecastModel(torch.nn.Module):
@@ -180,38 +155,40 @@ class AssimilationTest(unittest.TestCase):
 
         for epochs_val, lr_val in [(0, 0.05), (5, 0.0)]:
             for key_mode in ['c_n', 'c_0', 'both']:
-                cfg_dict = {
-                    'seq_length': 10,
-                    'history': 2,
-                    'assimilation_window': 1,
-                    'assimilation_lead_time': 0,
-                    'learning_rate': lr_val,
-                    'epochs': epochs_val,
-                    'loss': 'MSE',
-                    'optimizer': 'Adam',
-                    'assimilation_targets': ['c_n', 'h_n'],
-                    'target_variables': ['streamflow'],
-                    'predict_last_n': 1,
-                    'predict_n_hindcast': 2,
-                }
-                cfg = AssimilationConfig(cfg_dict)
-                assim = Assimilation(cfg)
-                model = MockWarmLSTM()
-                data = {
-                    'y': torch.ones(1, 10, 1) * 3.0,
-                    'x_d': torch.zeros(1, 10, 4),
-                }
-                if key_mode in ['c_n', 'both']:
-                    data['c_n'] = torch.ones(1, 1, 8) * 0.25
-                    data['h_n'] = torch.ones(1, 1, 8) * 0.10
-                if key_mode in ['c_0', 'both']:
-                    data['c_0'] = torch.ones(1, 1, 8) * 0.25
-                    data['h_0'] = torch.ones(1, 1, 8) * 0.10
+                for per_step in [False, True]:
+                    cfg_dict = {
+                        'seq_length': 10,
+                        'history': 2,
+                        'assimilation_window': 1,
+                        'assimilation_lead_time': 0,
+                        'learning_rate': lr_val,
+                        'epochs': epochs_val,
+                        'loss': 'MSE',
+                        'optimizer': 'Adam',
+                        'assimilation_targets': ['c_n', 'h_n'],
+                        'target_variables': ['streamflow'],
+                        'predict_last_n': 1,
+                        'predict_n_hindcast': 2,
+                        'use_per_step_updates': per_step,
+                    }
+                    cfg = AssimilationConfig(cfg_dict)
+                    assim = Assimilation(cfg)
+                    model = MockWarmLSTM()
+                    data = {
+                        'y': torch.ones(1, 10, 1) * 3.0,
+                        'x_d': torch.zeros(1, 10, 4),
+                    }
+                    if key_mode in ['c_n', 'both']:
+                        data['c_n'] = torch.ones(1, 1, 8) * 0.25
+                        data['h_n'] = torch.ones(1, 1, 8) * 0.10
+                    if key_mode in ['c_0', 'both']:
+                        data['c_0'] = torch.ones(1, 1, 8) * 0.25
+                        data['h_0'] = torch.ones(1, 1, 8) * 0.10
 
-                base_out = model(data)['y_hat']
-                da_out = assim.assimilate(model, data, verbose=False, check_timing=False)['y_hat']
-                diff = (da_out - base_out).abs().max().item()
-                self.assertEqual(diff, 0.0)
+                    base_out = model(data)['y_hat']
+                    da_out = assim.assimilate(model, data, verbose=False, check_timing=False)['y_hat']
+                    diff = (da_out - base_out).abs().max().item()
+                    self.assertEqual(diff, 0.0)
 
     def test_probabilistic_mixture_model_assimilation(self):
         """Verifies assimilate handles models returning mu and pi or mu alone without KeyError."""
@@ -252,12 +229,231 @@ class AssimilationTest(unittest.TestCase):
             'x_d': torch.zeros(1, 10, 4),
         }
 
-        # Test both mu+pi mixture and mu alone
         for mode in ['mu_pi', 'mu_only']:
             model = MockProbabilisticModel(mode=mode)
             res = assim.assimilate(model, data, verbose=False, check_timing=False)
             self.assertIn('y_hat', res)
             self.assertEqual(res['y_hat'].shape[0], 1)
+
+    def test_multi_horizon_shape_broadcast_robustness(self):
+        """Verifies multi-horizon forecasts with predict_last_n > 1 do not trigger shape IndexError."""
+        class MultiHorizonModel(torch.nn.Module):
+            state_var_names = ['c_n', 'h_n']
+            def __init__(self):
+                super().__init__()
+                self.fc = torch.nn.Linear(8, 1)
+            def forward(self, data):
+                c_n = data.get('c_n', data.get('c_0', torch.zeros(1, 1, 8)))
+                h_n = data.get('h_n', data.get('h_0', torch.zeros(1, 1, 8)))
+                y_hat = self.fc(c_n + h_n).expand(1, 7, 1)
+                return {'y_hat': y_hat, 'c_n': c_n, 'h_n': h_n}
+
+        cfg_dict = {
+            'seq_length': 20,
+            'history': 5,
+            'assimilation_window': 2,
+            'assimilation_lead_time': 2,
+            'learning_rate': 0.05,
+            'epochs': 3,
+            'loss': 'MSE',
+            'optimizer': 'Adam',
+            'assimilation_targets': ['c_n'],
+            'target_variables': ['streamflow'],
+            'predict_last_n': 7,
+            'predict_n_hindcast': 5,
+            'use_per_step_updates': True,
+        }
+        cfg = AssimilationConfig(cfg_dict)
+        assim = Assimilation(cfg)
+        model = MultiHorizonModel()
+        data = {
+            'y': torch.ones(1, 20, 1) * 2.5,
+            'x_d': torch.zeros(1, 20, 4)
+        }
+        res = assim.assimilate(model, data, verbose=False, check_timing=False)
+        self.assertIn('y_hat', res)
+        self.assertEqual(res['y_hat'].shape[1], 20)
+
+    def test_assimilation_continuity_as_lr_approaches_zero(self):
+        """Verifies that as learning_rate -> 0, data assimilation smoothly and continuously tends to the baseline."""
+        class RecurrentModel(torch.nn.Module):
+            state_var_names = ['c_n', 'h_n']
+            def __init__(self):
+                super().__init__()
+                self.lstm = torch.nn.LSTM(input_size=4, hidden_size=8, batch_first=True)
+                self.fc = torch.nn.Linear(8, 1)
+            def forward(self, data):
+                x = data['x_d']
+                h_0 = data.get('h_0', data.get('h_n', None))
+                c_0 = data.get('c_0', data.get('c_n', None))
+                hx = None
+                if h_0 is not None and c_0 is not None:
+                    if h_0.ndim == 3 and h_0.shape[1] == 1:
+                        h_0 = h_0.transpose(0, 1)
+                    if c_0.ndim == 3 and c_0.shape[1] == 1:
+                        c_0 = c_0.transpose(0, 1)
+                    hx = (h_0.contiguous(), c_0.contiguous())
+                out, (h_n, c_n) = self.lstm(x, hx)
+                return {'y_hat': self.fc(out), 'c_n': c_n.transpose(0, 1), 'h_n': h_n.transpose(0, 1)}
+
+        model = RecurrentModel()
+        torch.manual_seed(42)
+        data = {
+            'y': torch.ones(1, 10, 1) * 5.0,
+            'x_d': torch.randn(1, 10, 4),
+            'c_0': torch.randn(1, 1, 8),
+            'h_0': torch.randn(1, 1, 8),
+        }
+
+        diffs = []
+        lrs = [0.1, 0.01, 0.001, 1e-4, 0.0]
+        base_out = model(data)['y_hat']
+
+        for lr_val in lrs:
+            cfg_dict = {
+                'seq_length': 10,
+                'history': 2,
+                'assimilation_window': 1,
+                'assimilation_lead_time': 0,
+                'learning_rate': lr_val,
+                'epochs': 3,
+                'loss': 'MSE',
+                'optimizer': 'Adam',
+                'assimilation_targets': ['c_n', 'h_n'],
+                'target_variables': ['streamflow'],
+                'predict_last_n': 1,
+                'predict_n_hindcast': 2,
+                'use_per_step_updates': False,
+            }
+            cfg = AssimilationConfig(cfg_dict)
+            assim = Assimilation(cfg)
+            res = assim.assimilate(model, data, verbose=False, check_timing=False)
+            diff = (res['y_hat'] - base_out).abs().max().item()
+            diffs.append(diff)
+
+        # Confirm exact baseline match at lr = 0.0 within float32 tolerance
+        self.assertLessEqual(diffs[-1], 1e-6)
+        # Confirm monotonic smooth reduction as lr -> 0
+        for i in range(len(diffs) - 1):
+            self.assertGreaterEqual(diffs[i], diffs[i+1] - 1e-7)
+
+    def test_autoregressive_state_persistence(self):
+        """Verifies that last_prediction is forwarded across window rollouts for autoregressive models."""
+        class MockARModel(torch.nn.Module):
+            state_var_names = ['c_n', 'h_n', 'last_prediction']
+            def __init__(self):
+                super().__init__()
+                self.received_last_predictions = []
+            def forward(self, data):
+                last_pred = data.get('last_prediction', None)
+                self.received_last_predictions.append(last_pred)
+                c_n = data.get('c_n', data.get('c_0', torch.zeros(1, 1, 8)))
+                h_n = data.get('h_n', data.get('h_0', torch.zeros(1, 1, 8)))
+                y_hat = torch.ones(1, 1, 1) * 4.2
+                new_last_pred = torch.ones(1, 1, 1) * 9.9
+                return {'y_hat': y_hat, 'c_n': c_n, 'h_n': h_n, 'last_prediction': new_last_pred}
+
+        cfg_dict = {
+            'seq_length': 10,
+            'history': 3,
+            'assimilation_window': 1,
+            'assimilation_lead_time': 0,
+            'learning_rate': 0.0,
+            'epochs': 1,
+            'loss': 'MSE',
+            'optimizer': 'Adam',
+            'assimilation_targets': ['c_n', 'h_n'],
+            'target_variables': ['streamflow'],
+            'predict_last_n': 1,
+        }
+        cfg = AssimilationConfig(cfg_dict)
+        assim = Assimilation(cfg)
+        model = MockARModel()
+        data = {
+            'y': torch.ones(1, 10, 1) * 4.2,
+            'x_d': torch.zeros(1, 10, 4),
+            'last_prediction': torch.ones(1, 1, 1) * 1.1,
+        }
+        res = assim.assimilate(model, data, verbose=False, check_timing=False)
+        self.assertIn('y_hat', res)
+        # Verify last_prediction was forwarded to chunk_data in subsequent windows
+        non_none_preds = [p for p in model.received_last_predictions if p is not None]
+        self.assertGreater(len(non_none_preds), 1)
+
+    def test_state_injection_c_n_only(self):
+        """Verifies that when assim_targets=['c_n'], h_0/h_n is still injected into chunk_data and preserved."""
+        class MockDualStateModel(torch.nn.Module):
+            state_var_names = ['c_n', 'h_n']
+            def __init__(self):
+                super().__init__()
+            def forward(self, data):
+                c_n = data.get('c_n', data.get('c_0', torch.zeros(1, 1, 8)))
+                h_n = data.get('h_n', data.get('h_0', torch.zeros(1, 1, 8)))
+                # Assert that h state is injected (non-zero when provided in data)
+                y_hat = (c_n + h_n).sum().unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(1, 1, 1)
+                return {'y_hat': y_hat, 'c_n': c_n, 'h_n': h_n}
+
+        cfg_dict = {
+            'seq_length': 10,
+            'history': 2,
+            'assimilation_window': 1,
+            'assimilation_lead_time': 0,
+            'learning_rate': 0.0,
+            'epochs': 1,
+            'loss': 'MSE',
+            'optimizer': 'Adam',
+            'assimilation_targets': ['c_n'], # only c_n targeted
+            'target_variables': ['streamflow'],
+            'predict_last_n': 1,
+        }
+        cfg = AssimilationConfig(cfg_dict)
+        assim = Assimilation(cfg)
+        model = MockDualStateModel()
+        data = {
+            'y': torch.ones(1, 10, 1),
+            'x_d': torch.zeros(1, 10, 4),
+            'c_0': torch.ones(1, 1, 8) * 0.5,
+            'h_0': torch.ones(1, 1, 8) * 0.3,
+        }
+        base_out = model(data)['y_hat']
+        da_out = assim.assimilate(model, data, verbose=False, check_timing=False)['y_hat']
+        diff = (da_out - base_out).abs().max().item()
+        self.assertEqual(diff, 0.0)
+
+    def test_a_start_zero_initial_state_shape(self):
+        """Verifies initial state shape matching for a_start == 0 with 2-layer LSTM states (2, 1, 8)."""
+        class MultiLayerLSTMModel(torch.nn.Module):
+            def forward(self, data):
+                c_0 = data.get('c_0', data.get('c_n', torch.zeros(2, 1, 8)))
+                h_0 = data.get('h_0', data.get('h_n', torch.zeros(2, 1, 8)))
+                y_hat = torch.ones(1, 10, 1)
+                return {'y_hat': y_hat, 'c_n': c_0, 'h_n': h_0}
+
+        cfg_dict = {
+            'seq_length': 10,
+            'history': 2,
+            'assimilation_window': 1,
+            'assimilation_lead_time': 0,
+            'learning_rate': 0.0,
+            'epochs': 1,
+            'loss': 'MSE',
+            'optimizer': 'Adam',
+            'assimilation_targets': ['c_n', 'h_n'],
+            'target_variables': ['streamflow'],
+            'predict_last_n': 1,
+        }
+        cfg = AssimilationConfig(cfg_dict)
+        assim = Assimilation(cfg)
+        model = MultiLayerLSTMModel()
+        data = {
+            'y': torch.ones(1, 10, 1),
+            'x_d': torch.zeros(1, 10, 4),
+            'c_0': torch.ones(2, 1, 8) * 0.7,
+            'h_0': torch.ones(2, 1, 8) * 0.2,
+        }
+        res = assim.assimilate(model, data, verbose=False, check_timing=False)
+        self.assertEqual(res['c_n'].shape, (2, 1, 8))
+        self.assertEqual(res['h_n'].shape, (2, 1, 8))
 
 
 if __name__ == '__main__':

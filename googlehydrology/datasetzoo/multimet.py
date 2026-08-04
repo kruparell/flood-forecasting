@@ -577,7 +577,14 @@ class Multimet(Dataset):
         Allows index-based sample retrieval, faster than coordinate-based sample
         retrieval.
         """
-        # Create a boolean mask for the original dataset noting valid (True) vs. invalid (False) samples.
+        hindcast_features_to_validate = [
+            f for f in self._hindcast_features
+            if f not in (self._cfg.autoregressive_inputs or [])
+            and f not in (self._cfg.random_holdout_from_dynamic_features or {})
+        ]
+        if not hindcast_features_to_validate:
+            hindcast_features_to_validate = None
+
         valid_sample_mask = validate_samples(
             is_train=self.is_train,
             dataset=self._dataset,
@@ -590,20 +597,20 @@ class Multimet(Dataset):
             min_lead_time=self._min_lead_time,
             static_features=self._static_features,
             forecast_features=self._forecast_features,
-            hindcast_features=self._hindcast_features,
+            hindcast_features=hindcast_features_to_validate,
             target_features=self._target_features,
             feature_groups=self._feature_groups,
             allzero_samples_are_invalid=self._allzero_samples_are_invalid,
         )[0]
+
 
         # Convert boolean valid sample mask into indexes of all samples. This retains
         # only the portion of the valid sample mask with True values.
         # Each element is a list of valid integer positions (indexers) for which
         # values are True for a dimension.
         indices = dask.array.nonzero(valid_sample_mask.data)
-        # Compact memory widths. Values are indexes within each mask's shape.
-        min_dtypes = map(np.min_scalar_type, valid_sample_mask.shape)
-        indices = tuple(idx.astype(dt) for idx, dt in zip(indices, min_dtypes))
+        # Use signed 64-bit integer for index arrays to prevent unsigned underflow during sequence window math.
+        indices = tuple(idx.astype(np.int64) for idx in indices)
 
         return valid_sample_mask, indices
 
@@ -689,8 +696,27 @@ class Multimet(Dataset):
                     raise ValueError(f"Variable {var_name} to be shifted not found in dataset.")
                 ds[ar_input] = ds[var_name].shift(date=shift)
 
+        if self._cfg.random_holdout_from_dynamic_features:
+            (ds,) = dask.compute(ds)
+            from googlehydrology.utils.samplingutils import bernoulli_subseries_sampler
+            for holdout_var, holdout_dict in self._cfg.random_holdout_from_dynamic_features.items():
+                target_vars = [holdout_var]
+                if holdout_var in ["QObs_shift1", "QObs(mm/d)_shift1"] and "streamflow_shift1" in ds:
+                    target_vars.append("streamflow_shift1")
+                for tvar in target_vars:
+                    if tvar in ds:
+                        for b in ds.coords['basin'].values:
+                            sub_series = ds[tvar].sel(basin=b).values
+                            sampled = bernoulli_subseries_sampler(
+                                data=sub_series,
+                                missing_fraction=holdout_dict['missing_fraction'],
+                                mean_missing_length=holdout_dict['mean_missing_length'],
+                            )
+                            ds[tvar].loc[dict(basin=b)] = sampled
+
         LOGGER.debug('rechunk')
         ds = rechunk(ds)
+
 
         return ds
 
@@ -1036,10 +1062,10 @@ def _extract_dataarray(
     This function replaces uses of `isel` with data and indexers.
     """
     locs = (
-        indexers[dim] if dim in indexers else slice(None) for dim in data.dims
+        slice(indexers[dim].start, indexers[dim].stop) if (dim in indexers and isinstance(indexers[dim], range))
+        else (indexers[dim] if dim in indexers else slice(None))
+        for dim in data.dims
     )
-    # Convert range(0, n) to [0, 1, ..., n-1] as arrays don't support range.
-    locs = (list(loc) if isinstance(loc, range) else loc for loc in locs)
     return data.data[tuple(locs)]
 
 

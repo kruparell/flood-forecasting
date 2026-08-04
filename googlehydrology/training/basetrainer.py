@@ -408,13 +408,26 @@ class BaseTrainer(object):
         )
 
     def _save_weights_and_optimizer(self, epoch: int):
-        weight_path = self.cfg.run_dir / f'model_epoch{epoch:03d}.pt'
-        torch.save(self.model.state_dict(), str(weight_path))
+        run_dir = Path(self.cfg.run_dir)
+        weight_path = run_dir / f'model_epoch{epoch:03d}.pt'
+        optimizer_path = run_dir / f'optimizer_state_epoch{epoch:03d}.pt'
 
-        optimizer_path = (
-            self.cfg.run_dir / f'optimizer_state_epoch{epoch:03d}.pt'
-        )
-        torch.save(self.optimizer.state_dict(), str(optimizer_path))
+        str_weight = str(weight_path)
+        str_opt = str(optimizer_path)
+        if str_weight.startswith('/cns/'):
+            from googlehydrology.utils.gfile_utils import get_gfile
+            gfile = get_gfile()
+            with gfile.GFile(str_weight, 'wb') as f:
+                torch.save(self.model.state_dict(), f)
+            with gfile.GFile(str_opt, 'wb') as f:
+                torch.save(self.optimizer.state_dict(), f)
+            LOGGER.info(f"Saved model weights for epoch {epoch} to {weight_path}")
+        else:
+            torch.save(self.model.state_dict(), str_weight)
+            torch.save(self.optimizer.state_dict(), str_opt)
+            LOGGER.info(f"Saved model weights for epoch {epoch} to {weight_path} (exists: {weight_path.exists()})")
+
+
 
     def _train_epoch(self, epoch: int):
         self.model.train()
@@ -486,6 +499,25 @@ class BaseTrainer(object):
                     torch.nn.utils.clip_grad_norm_(
                         self.model.parameters(), self.cfg.clip_gradient_norm
                     )
+
+                # Hypothesis 2: Gradient Norm Diagnostic Probe
+                if (i == 0 or i + 1 == n_iter) and hasattr(self.model, 'hindcast_cell') and hasattr(self.model, 'static_embedding_fc'):
+                    static_dim = self.model.static_embedding_fc.output_size
+                    dyn_dim = self.model.config_data.hindcast_embedding.hiddens[-1]
+                    x_ar_col_idx = static_dim + dyn_dim
+                    w_ih_grad = self.model.hindcast_cell.weight_ih_l0.grad
+                    if w_ih_grad is not None:
+                        g_static = w_ih_grad[:, :static_dim].norm().item()
+                        g_dyn = w_ih_grad[:, static_dim:x_ar_col_idx].norm().item()
+                        g_xar = w_ih_grad[:, x_ar_col_idx].norm().item()
+                        g_flags = w_ih_grad[:, x_ar_col_idx + 1].norm().item() if w_ih_grad.shape[1] > x_ar_col_idx + 1 else 0.0
+                        msg = (
+                            f"[H2 Gradient Diagnostics (Epoch {epoch} Batch {i})] "
+                            f"x_ar GradNorm={g_xar:.6f} | Flags GradNorm={g_flags:.6f} | "
+                            f"Weather GradNorm={g_dyn:.6f} | Static GradNorm={g_static:.6f}"
+                        )
+                        LOGGER.info(msg)
+                        print(msg, flush=True)
 
                 # update weights
                 self.scaler.step(self.optimizer)
@@ -561,13 +593,28 @@ class BaseTrainer(object):
                 self.cfg.run_dir = self.cfg.run_dir / run_name
 
         # create folder + necessary subfolder
-        if not self.cfg.run_dir.is_dir():
-            self.cfg.train_dir = self.cfg.run_dir / 'train_data'
-            self.cfg.train_dir.mkdir(parents=True)
+        str_run_dir = str(self.cfg.run_dir)
+        if str_run_dir.startswith('/cns/'):
+            from googlehydrology.utils.gfile_utils import get_gfile
+            gfile = get_gfile()
+            if not gfile.Exists(str_run_dir):
+                self.cfg.train_dir = Path(str_run_dir) / 'train_data'
+                gfile.MakeDirs(str(self.cfg.train_dir))
+            else:
+                raise RuntimeError(
+                    f'There is already a folder at {self.cfg.run_dir}'
+                )
+            if self.cfg.log_n_figures is not None:
+                self.cfg.img_log_dir = Path(str_run_dir) / 'img_log'
+                gfile.MakeDirs(str(self.cfg.img_log_dir))
         else:
-            raise RuntimeError(
-                f'There is already a folder at {self.cfg.run_dir}'
-            )
-        if self.cfg.log_n_figures is not None:
-            self.cfg.img_log_dir = self.cfg.run_dir / 'img_log'
-            self.cfg.img_log_dir.mkdir(parents=True)
+            if not self.cfg.run_dir.is_dir():
+                self.cfg.train_dir = self.cfg.run_dir / 'train_data'
+                self.cfg.train_dir.mkdir(parents=True)
+            else:
+                raise RuntimeError(
+                    f'There is already a folder at {self.cfg.run_dir}'
+                )
+            if self.cfg.log_n_figures is not None:
+                self.cfg.img_log_dir = self.cfg.run_dir / 'img_log'
+                self.cfg.img_log_dir.mkdir(parents=True)

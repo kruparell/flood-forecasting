@@ -1,11 +1,10 @@
-#!/usr/bin/env python3
 # Copyright 2025 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#      http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,12 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Script: generate_and_execute_50basin_arlstm_notebook.py
-Builds and fully executes tutorial/notebooks/Evaluate_50_Basin_Trained_Model.ipynb.
-"""
+"""Helper to safely acquire gfile in both Google3 and standalone environments."""
 
-from generate_and_render_50basin_notebook import build_and_execute_notebook
-
-if __name__ == '__main__':
-    build_and_execute_notebook()
+def get_gfile():
+    try:
+        from google3.pyglib import gfile
+        return gfile
+    except ImportError:
+        try:
+            from pyglib import gfile
+            return gfile
+        except ImportError:
+            return None

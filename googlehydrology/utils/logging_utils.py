@@ -40,6 +40,26 @@ class WarningOnceFilter(logging.Filter):
         return True  # First seen so printed
 
 
+from googlehydrology.utils.gfile_utils import get_gfile
+gfile = get_gfile()
+
+import os
+
+class GFileHandler(logging.StreamHandler):
+    """Logging handler that writes to a gfile handle for CNS compatibility."""
+    def __init__(self, filename, mode='a'):
+        if gfile:
+            self._file = gfile.GFile(filename, mode)
+            super().__init__(self._file)
+        else:
+            super().__init__(sys.stdout)
+
+    def emit(self, record):
+        super().emit(record)
+        if hasattr(self._file, 'flush'):
+            self._file.flush()
+
+
 def setup_logging(log_file: str, level: int, print_warnings_once: bool):
     """Initialize logging to `log_file` and stdout.
 
@@ -56,7 +76,22 @@ def setup_logging(log_file: str, level: int, print_warnings_once: bool):
     if print_warnings_once:
         logging.getLogger('py.warnings').addFilter(WarningOnceFilter())
 
-    file_handler = logging.FileHandler(filename=log_file)
+    log_file_str = str(log_file)
+    if log_file_str.startswith('/cns/'):
+        if gfile:
+            parent_dir = os.path.dirname(log_file_str)
+            if not gfile.Exists(parent_dir):
+                try:
+                    gfile.MakeDirs(parent_dir)
+                except Exception:
+                    pass
+            file_handler = GFileHandler(log_file_str)
+        else:
+            file_handler = logging.NullHandler()
+    else:
+        os.makedirs(os.path.dirname(os.path.abspath(log_file_str)), exist_ok=True)
+        file_handler = logging.FileHandler(filename=log_file_str)
+
     stdout_handler = logging.StreamHandler(sys.stdout)
 
     logging.basicConfig(
@@ -67,9 +102,10 @@ def setup_logging(log_file: str, level: int, print_warnings_once: bool):
         format='[{levelname}] {asctime}.{msecs:0<3.0f} ({filename}:{funcName}) -- {message}',
     )
 
-    # Make sure we log uncaught exceptions
+    # Make sure we log uncaught exceptions and print to stderr for Borg visibility
     def exception_logging(type, value, tb):
         LOGGER.exception(f'Uncaught exception', exc_info=(type, value, tb))
+        sys.__excepthook__(type, value, tb)
 
     sys.excepthook = exception_logging
 
@@ -122,38 +158,48 @@ def save_git_diff(run_dir: Path):
     run_dir : Path
         Directory of the current run.
     """
+    str_run_dir = str(run_dir)
     base_dir = str(Path(__file__).absolute().parent)
     try:
         # diff should include staged and unstaged changes, hence we use "HEAD"
         out = subprocess.check_output(
             ['git', '-C', base_dir, 'diff', 'HEAD'], stderr=subprocess.DEVNULL
         )
-    except OSError:
-        LOGGER.warning(
-            'Could not store git diff, likely because git is not installed '
-            'or because your version of git is too old (< 1.8.5)'
-        )
+    except Exception:
         return
 
     new_diff = out.strip().decode('utf-8')
+    if not new_diff:
+        return
 
-    if new_diff:
-        existing_diffs = list(run_dir.glob('googlehydrology*.diff'))
-        if len(existing_diffs) > 0:
-            last_diff_path = (
-                run_dir / f'googlehydrology-{len(existing_diffs) - 1}.diff'
-            )
-            with last_diff_path.open('r') as last_diff_file:
-                last_diff = last_diff_file.read()
-            if last_diff == new_diff:
-                LOGGER.info(
-                    f'Git repository contains uncommitted changes that are stored in {last_diff_path}.'
-                )
-                return
+    if str_run_dir.startswith('/cns/'):
+        from googlehydrology.utils.gfile_utils import get_gfile
+        gfile = get_gfile()
+        try:
+            existing_diffs = gfile.Glob(f"{str_run_dir}/googlehydrology*.diff")
+            file_path = f"{str_run_dir}/googlehydrology-{len(existing_diffs)}.diff"
+            with gfile.GFile(file_path, 'w') as diff_file:
+                diff_file.write(new_diff)
+        except Exception as e:
+            LOGGER.warning(f"Could not save git diff to CNS: {e}")
+        return
 
-        file_path = run_dir / f'googlehydrology-{len(existing_diffs)}.diff'
-        LOGGER.warning(
-            f'Git repository contains uncommitted changes. Writing diff to {file_path}.'
+    existing_diffs = list(run_dir.glob('googlehydrology*.diff'))
+    if len(existing_diffs) > 0:
+        last_diff_path = (
+            run_dir / f'googlehydrology-{len(existing_diffs) - 1}.diff'
         )
-        with file_path.open('w') as diff_file:
-            diff_file.write(new_diff)
+        with last_diff_path.open('r') as last_diff_file:
+            last_diff = last_diff_file.read()
+        if last_diff == new_diff:
+            LOGGER.info(
+                f'Git repository contains uncommitted changes that are stored in {last_diff_path}.'
+            )
+            return
+
+    file_path = run_dir / f'googlehydrology-{len(existing_diffs)}.diff'
+    LOGGER.warning(
+        f'Git repository contains uncommitted changes. Writing diff to {file_path}.'
+    )
+    with file_path.open('w') as diff_file:
+        diff_file.write(new_diff)

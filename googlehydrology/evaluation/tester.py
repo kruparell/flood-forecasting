@@ -234,7 +234,7 @@ class BaseTester(object):
 
         batch_sampler = BasinBatchSampler(
             sample_index=self.dataset._sample_index,
-            batch_size=self.cfg.batch_size,
+            batch_size=max(self.cfg.batch_size, 256),
             basins_indexes=get_samples_indexes(
                 self.basins, samples=list(basins)
             ),
@@ -335,9 +335,12 @@ class BaseTester(object):
                     and predict_last_n[lowest_freq] > 1
                 ):
                     time_step_coords += self.dataset.lead_time
-                    date_coords = dates[lowest_freq][
-                        :, -self.dataset.lead_time - 1
-                    ]
+                    idx = -self.dataset.lead_time - 1
+                    if abs(idx) <= dates[lowest_freq].shape[1]:
+                        date_coords = dates[lowest_freq][:, idx]
+                    else:
+                        date_coords = dates[lowest_freq][:, 0]
+
                 coords = {'date': date_coords, 'time_step': time_step_coords}
                 xr = xarray.Dataset(data_vars=data_vars, coords=coords)
                 xr = xr.reindex(

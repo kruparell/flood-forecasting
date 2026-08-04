@@ -128,3 +128,7 @@ class AssimilationConfig(BaseConfig):
     @property
     def use_per_step_updates(self) -> bool:
         return bool(self._cfg.get("use_per_step_updates", True))
+
+    @property
+    def clip_gradient_norm(self) -> float:
+        return float(self._cfg.get("clip_gradient_norm", 1.0))

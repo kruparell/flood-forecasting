@@ -1,30 +1,30 @@
-# Implementation Plan: Data Assimilation with Caravans Dataset & Multi-Basin Pipeline
+# Implementation Plan - ARLSTM Bugs Demonstration Notebook (Synthesis)
 
-## 1. Objectives & Context
-- **Source Notebook**: `tutorial/rivretrieve/Data_Assimilation_RivRetrieve.ipynb`
-- **Target Notebook**: `tutorial/Data_Assimilation_Caravans.ipynb` (also mirrored at `tutorial/notebooks/Data_Assimilation_Caravans.ipynb`)
-- **Caravans Dataset**: NetCDF time series in `Caravan-nc/timeseries/netcdf/camels/` (and `Caravans/timeseries/netcdf/camels/`) and catchment attributes in `Caravan-nc/attributes/camels/`.
-- **Streamflow in Caravans**: Measured natively in mm/day.
-- **Zero RivRetrieve**: 100% purged all `rivretrieve` client imports, UKEAFetcher calls, and legacy API downloads.
+## Objective
+Create a clear, direct, and well-structured Jupyter Notebook at `~/flood-forecasting/tutorial/notebooks/ARLSTM_Bugs_Demonstration.ipynb` (and synchronized to `~/flood-forecasting/tutorial/ARLSTM_Bugs_Demonstration.ipynb`) that demonstrates all 4 identified ARLSTM bugs using minimal PyTorch dummy tensors and synthetic configs.
 
-## 2. Key Components Implemented & Synthesized
-1. **Single-Basin 4D-Var Data Assimilation Demonstration**:
-   - Loads dynamic ERA5-Land NetCDF meteorological forcings and observed streamflow (mm/day) from Caravans (`camels_12451000.nc`).
-   - Loads static catchment attributes and normalizes inputs with `scaler.nc`.
-   - Executes 4D-Var state updating via `googlehydrology.evaluation.assimilation.Assimilation`.
-   - Computes hydrological metrics (NSE, KGE, Pearson-r, RMSE) comparing open-loop foundation model (NSE approx +0.628) against 4D-Var assimilated model (NSE approx +0.961).
-   - Generates full-year hydrographs and zoom-in peak event plots.
+## Detailed Plan
 
-2. **Multi-Lead-Time Forecast Skill**:
-   - Computes sliding-window 4D-Var forecasts across lead times L = 1, 3, 5 days.
-   - Plots lead-time hydrographs and skill decay curves.
+### 1. Notebook Design & Structure
+The notebook is structured into 6 logical sections across 11 markdown and code cells:
 
-3. **Multi-Basin 4D-Var Evaluation Pipeline with Loss Tracking**:
-   - Implements `evaluate_caravans_multi_basin_pipeline` iterating across diverse Caravans catchments (`camels_12451000`, `camels_04216418`, `camels_07057500`, `camels_13235000`, `camels_12115000`).
-   - Tracks objective loss progression per optimization epoch demonstrating steady convergence.
-   - Evaluates forecast accuracy at specific lead times (1-day and 5-day lead times) for each catchment.
-   - Generates a multi-panel diagnostic figure visualizing loss curves, 1-day vs 5-day lead-time NSE comparisons, KGE comparisons, and percentage loss reductions.
+- **Cell 0 [Markdown]**: Title, Executive Summary, Prerequisites, and Overview of the 4 Bugs.
+- **Cell 1 [Code]**: Setup & Base Helper Functions (`create_base_config`, imports, `RUN_DIR` resolution).
+- **Cell 2 [Markdown]**: Section 1 - Target-to-AR Variable Order Mismatch.
+- **Cell 3 [Code]**: Section 1 Code - Demonstrates silent channel substitution when target variable order differs from autoregressive input order.
+- **Cell 4 [Markdown]**: Section 2 - PyTorch Autograd In-Place Mutation RuntimeError.
+- **Cell 5 [Code]**: Section 2 Code - Demonstrates in-place slice mutation (`last_prediction[0] = prediction`) and autograd version counter mismatch during `backward()` when NaNs are present in AR inputs, plus the out-of-place fix.
+- **Cell 6 [Markdown]**: Section 3 - Probabilistic Head (CMAL / GMM / UMAL) Incompatibility & KeyError.
+- **Cell 7 [Code]**: Section 3 Code - Demonstrates initialization `ValueError` (`output_size != num_ar_inputs`) and forward pass `KeyError: 'y_hat'`.
+- **Cell 8 [Markdown]**: Section 4 - Multi-Layer Hidden State Shape Mismatch.
+- **Cell 9 [Code]**: Section 4 Code - Demonstrates `ARLSTM.__init__` ignoring `num_layers` (stuck at 1) and `torch.squeeze(..., dim=1)` shape mismatch when `num_layers > 1`.
+- **Cell 10 [Markdown]**: Summary of Architectural Bugs & Recommended Fixes.
 
-## 3. Verification & Execution Status
-- Executed all 16 cells of `tutorial/Data_Assimilation_Caravans.ipynb` end-to-end via `nbconvert.preprocessors.ExecutePreprocessor` in the Python 3.12 `googlehydrology` Conda environment.
-- Verified 0 error cells, 0 references to `rivretrieve` or `ukea`, and fully serialized outputs (tables, printouts, and matplotlib figures).
+### 2. Implementation Execution
+- Verified the notebook structure and execution cleanly.
+- Saved to `/usr/local/google/home/kruparell/flood-forecasting/tutorial/notebooks/ARLSTM_Bugs_Demonstration.ipynb`.
+
+### 3. Verification & Synchronization
+- Executed notebook using `/usr/local/google/home/kruparell/miniforge3/envs/googlehydrology/bin/jupyter nbconvert --to notebook --execute /usr/local/google/home/kruparell/flood-forecasting/tutorial/notebooks/ARLSTM_Bugs_Demonstration.ipynb --output /usr/local/google/home/kruparell/flood-forecasting/tutorial/notebooks/ARLSTM_Bugs_Demonstration.ipynb`.
+- Synchronized notebook to `/usr/local/google/home/kruparell/flood-forecasting/tutorial/ARLSTM_Bugs_Demonstration.ipynb`.
+- Verified that both notebooks exist and match.

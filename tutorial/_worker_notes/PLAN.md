@@ -1,21 +1,15 @@
-# Synthesis Implementation Plan
+# Synthesis Implementation Plan (Layer-2 Synthesis)
 
-## Goal
-Add to `tutorial/notebooks/Evaluate_50_Basin_Trained_Model.ipynb` the evaluation and hydrograph plots of the ARLSTM model results under two distinct operational inference scenarios:
-1. **Zero River Discharge Given as Input During Inference** ($Q_{\text{ar, zero}}$): Open-loop meteorological simulation without streamflow observation inputs ($Q_{t-1} = 0$).
-2. **Continuous / Full River Discharge Given at All Timesteps During Inference** ($Q_{\text{ar, full}}$): Antecedent streamflow observations ($Q_{t-1}^{\text{obs}}$) available continuously at all timesteps.
+## Objectives
+1. Eliminate hardcoded prior worker workspace paths in Cell 12 of `ARLSTM_Bugs_Demonstration.ipynb` by implementing dynamic upward path resolution for `model-runs`.
+2. Confirm the 10-basin ARLSTM evaluation results in Closed-Loop ($Q_{obs}$ provided) and Open-Loop ($Q_{obs}$ missing) modes.
+3. Repopulate `ARLSTM_Bugs_Demonstration.ipynb` with real 10-basin hydrographs and evaluation metric summary tables.
+4. Execute the notebook headlessly with `jupyter nbconvert --to notebook --execute --inplace` to confirm 0 errors and rendered figure outputs.
+5. Synchronize the executed notebook across all 4 target paths in the home directory and google3 monorepo workspace.
 
-## Implementation Steps
-1. **Model & Data Evaluation**:
-   - Evaluate the 10-epoch retrained ARLSTM model under both inference modes.
-   - Apply physical unscaling ($\mu = 1.7772, \sigma = 3.3810$) from `scaler.nc` with non-negativity bounding ($Q_{\text{phys}} = \max(0, Q_{\text{sim}})$).
-2. **Comparative Visualizations & Metrics**:
-   - Figure 1: Empirical CDF curves (NSE & KGE), model distribution boxplots, and scatter comparisons across models and modes.
-   - Figure 2: Multi-model streamflow hydrographs across representative CAMELS test catchments (`camels_01054200`, `camels_01195100`, `camels_01350000`, `camels_01413500`) over the complete 1-year test period (`2011-10-01` to `2012-09-30`).
-3. **Execution & Serialization**:
-   - Execute all 11 notebook cells cleanly using `ExecutePreprocessor`.
-   - Serialize embedded high-resolution PNG plots into the notebook JSON output blocks.
-   - Maintain perfect synchronization between `tutorial/notebooks/Evaluate_50_Basin_Trained_Model.ipynb` and `tutorial/Evaluate_50_Basin_Trained_Model.ipynb`.
-4. **Verification**:
-   - Run automated unit tests in `googlehydrology/evaluation/assimilation_test.py` (7/7 passed).
-   - Validate notebook execution count, cell output keys, and figure payload serialization.
+## Step-by-Step Execution
+1. **Refactor Cell 12**: Update candidate path resolution to search parent directories dynamically up to 5 levels above `cwd` and `/usr/local/google/home/kruparell/flood-forecasting/tutorial/model-runs`.
+2. **Execute Headlessly**: Run `jupyter nbconvert` using the `googlehydrology` python environment.
+3. **Copy to All Target Paths**: Sync to all 4 notebook locations.
+4. **Re-verify Headless Run**: Verify all 4 copies execute without errors.
+5. **Document Handoff**: Write structured report to `_worker_notes/README.md` and send report to orchestrator via `send_message`.

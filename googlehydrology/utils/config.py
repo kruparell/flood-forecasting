@@ -156,16 +156,17 @@ class Config(BaseConfig):
         """
         yml_path = folder / filename
         yml_path = yml_path.expanduser()
-        if not yml_path.exists():
-            with yml_path.open('w') as fp:
+        str_path = str(yml_path)
+        if str_path.startswith('/cns/'):
+            from googlehydrology.utils.gfile_utils import get_gfile
+            gfile = get_gfile()
+            if not gfile.Exists(str_path):
+                parent_dir = str(folder)
+                if not gfile.Exists(parent_dir):
+                    gfile.MakeDirs(parent_dir)
                 temp_cfg = {}
                 for key, val in self._cfg.items():
-                    if any(
-                        [
-                            key.endswith(x)
-                            for x in ['_dir', '_path', '_file', '_files']
-                        ]
-                    ):
+                    if any([key.endswith(x) for x in ['_dir', '_path', '_file', '_files']]):
                         if isinstance(val, list):
                             temp_list = []
                             for elem in val:
@@ -177,20 +178,54 @@ class Config(BaseConfig):
                         if isinstance(val, list):
                             temp_list = []
                             for elem in val:
-                                temp_list.append(
-                                    elem.strftime(format='%d/%m/%Y')
-                                )
+                                temp_list.append(elem.strftime(format='%d/%m/%Y'))
                             temp_cfg[key] = temp_list
                         else:
                             assert isinstance(val, pd.Timestamp)
                             temp_cfg[key] = val.strftime(format='%d/%m/%Y')
                     else:
                         temp_cfg[key] = val
-
                 yaml = YAML()
-                yaml.dump(dict(OrderedDict(sorted(temp_cfg.items()))), fp)
+                with gfile.GFile(str_path, 'w') as fp:
+                    yaml.dump(dict(OrderedDict(sorted(temp_cfg.items()))), fp)
+            else:
+                raise FileExistsError(yml_path)
         else:
-            raise FileExistsError(yml_path)
+            if not yml_path.exists():
+                with yml_path.open('w') as fp:
+                    temp_cfg = {}
+                    for key, val in self._cfg.items():
+                        if any(
+                            [
+                                key.endswith(x)
+                                for x in ['_dir', '_path', '_file', '_files']
+                            ]
+                        ):
+                            if isinstance(val, list):
+                                temp_list = []
+                                for elem in val:
+                                    temp_list.append(str(elem))
+                                temp_cfg[key] = temp_list
+                            else:
+                                temp_cfg[key] = str(val)
+                        elif key.endswith('_date'):
+                            if isinstance(val, list):
+                                temp_list = []
+                                for elem in val:
+                                    temp_list.append(
+                                        elem.strftime(format='%d/%m/%Y')
+                                    )
+                                temp_cfg[key] = temp_list
+                            else:
+                                assert isinstance(val, pd.Timestamp)
+                                temp_cfg[key] = val.strftime(format='%d/%m/%Y')
+                        else:
+                            temp_cfg[key] = val
+
+                    yaml = YAML()
+                    yaml.dump(dict(OrderedDict(sorted(temp_cfg.items()))), fp)
+            else:
+                raise FileExistsError(yml_path)
 
     def update_config(
         self, yml_path_or_dict: Path | dict, dev_mode: bool = False
@@ -910,6 +945,11 @@ class Config(BaseConfig):
     @property
     def use_basin_id_encoding(self) -> bool:
         return self._cfg.get("use_basin_id_encoding", False)
+
+    @property
+    def random_holdout_from_dynamic_features(self) -> dict:
+        return self._as_default_dict(self._cfg.get("random_holdout_from_dynamic_features", {}))
+
 
 
 def create_random_name():

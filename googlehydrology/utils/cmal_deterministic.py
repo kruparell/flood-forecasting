@@ -26,7 +26,7 @@ import torch
 import torch.cuda
 
 
-@torch.compile()
+@torch.compile(disable=not torch.cuda.is_available())
 def generate_predictions(
     mu: torch.Tensor, b: torch.Tensor, tau: torch.Tensor, pi: torch.Tensor
 ) -> torch.Tensor:

@@ -14,9 +14,11 @@
 
 from typing import Callable
 
+import numpy as np
 import torch
 
 from googlehydrology.datautils.scaler import Scaler
+
 from googlehydrology.utils import cmal_deterministic
 from googlehydrology.utils.config import Config
 
@@ -615,4 +617,49 @@ def sample_cmal(
         samples[f'y_hat{freq_suffix}'] = torch.stack(sample_points, dim=2)
 
     return samples
+
+
+def bernoulli_subseries_sampler(
+    data: np.ndarray,
+    missing_fraction: float,
+    mean_missing_length: float,
+    start_sampling_on: bool = True,
+) -> np.ndarray:
+    """Samples a timeseries according to a pair of Bernoulli processes."""
+    if missing_fraction == 0:
+        return data
+    if missing_fraction == 1:
+        return np.full(data.shape, np.nan)
+
+    if not (data.ndim == 1 or (data.ndim == 2 and data.shape[-1] == 1)):
+        raise ValueError('Shape of timeseries data must be N or (N, 1).')
+
+    if mean_missing_length < missing_fraction / (1 - missing_fraction):
+        raise ValueError('Incompatible distribution parameters in timeseries sampling.')
+    if missing_fraction < 0 or missing_fraction > 1:
+        raise ValueError('Missing fraction must be in [0,1]')
+    if mean_missing_length <= 0:
+        raise ValueError('Mean missing length must be > 0.')
+
+    on_shift_rate = 1 / mean_missing_length
+    off_shift_rate = on_shift_rate * missing_fraction / (1 - missing_fraction)
+
+    sampled_data = np.full(data.shape, np.nan)
+    sampled_data[0] = data[0]
+    if not start_sampling_on:
+        sampled_data[0] = np.nan
+
+    up_switches = np.random.binomial(n=1, p=on_shift_rate, size=data.shape)
+    down_switches = np.random.binomial(n=1, p=off_shift_rate, size=data.shape)
+
+    for n in range(1, len(data)):
+        if np.isnan(sampled_data[n - 1]):
+            if up_switches[n]:
+                sampled_data[n] = data[n]
+        else:
+            if not down_switches[n]:
+                sampled_data[n] = data[n]
+
+    return sampled_data
+
 
