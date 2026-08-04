@@ -67,18 +67,29 @@ def load_caravan_attributes(
         A basin indexed Dataset with all attributes as coordinates.
     """
     LOGGER.debug('')
+    subdataset_dir_str = str(data_dir / 'attributes' / subdataset) if subdataset else ''
     if subdataset:
-        subdataset_dir = data_dir / 'attributes' / subdataset
-        if not subdataset_dir.is_dir():
-            raise FileNotFoundError(
-                f'No subdataset {subdataset} found at {subdataset_dir}.'
-            )
-        subdataset_dirs = [subdataset_dir]
-
+        if subdataset_dir_str.startswith('/cns/'):
+            from googlehydrology.utils.gfile_utils import get_gfile
+            gfile = get_gfile()
+            if not gfile.Exists(subdataset_dir_str):
+                raise FileNotFoundError(f'No subdataset {subdataset} found at {subdataset_dir_str}.')
+        else:
+            subdataset_dir = data_dir / 'attributes' / subdataset
+            if not subdataset_dir.is_dir():
+                raise FileNotFoundError(f'No subdataset {subdataset} found at {subdataset_dir}.')
+        subdataset_dirs = [data_dir / 'attributes' / subdataset]
     else:
-        subdataset_dirs = [
-            d for d in (data_dir / 'attributes').glob('*') if d.is_dir()
-        ]
+        attr_dir_str = str(data_dir / 'attributes')
+        if attr_dir_str.startswith('/cns/'):
+            from googlehydrology.utils.gfile_utils import get_gfile
+            gfile = get_gfile()
+            if gfile:
+                subdataset_dirs = [Path(p.rstrip('/')) for p in gfile.Glob(f"{attr_dir_str}/*")]
+            else:
+                subdataset_dirs = [d for d in (data_dir / 'attributes').glob('*') if d.is_dir()]
+        else:
+            subdataset_dirs = [d for d in (data_dir / 'attributes').glob('*') if d.is_dir()]
 
     if basins:
         # Get list of unique sub datasets from the basin strings.
@@ -93,11 +104,20 @@ def load_caravan_attributes(
                 )
         else:
             # Check if all subdatasets exist.
-            missing_subdatasets = [
-                s
-                for s in subdataset_names
-                if not (data_dir / 'attributes' / s).is_dir()
-            ]
+            missing_subdatasets = []
+            for s in subdataset_names:
+                s_path = str(data_dir / 'attributes' / s)
+                if s_path.startswith('/cns/'):
+                    import os
+                    from googlehydrology.utils.gfile_utils import get_gfile
+                    gfile = get_gfile()
+                    if gfile and not gfile.Exists(s_path):
+                        missing_subdatasets.append(s)
+                    elif not gfile and not os.path.exists(s_path):
+                        missing_subdatasets.append(s)
+                else:
+                    if not (data_dir / 'attributes' / s).is_dir() and not (data_dir / 'attributes' / s.lower()).is_dir():
+                        missing_subdatasets.append(s)
 
             if missing_subdatasets:
                 raise FileNotFoundError(
@@ -186,12 +206,20 @@ def load_caravan_timeseries_together(
     """
     bar_off = logging.getLogger().level > logging.DEBUG
 
+    def check_file(path: Path) -> bool:
+        path_str = str(path)
+        if path_str.startswith('/cns/'):
+            from googlehydrology.utils.gfile_utils import get_gfile
+            gfile = get_gfile()
+            return gfile.Exists(path_str)
+        return path.is_file()
+
     def basin_to_path(basin: str) -> Path:
         subdataset = basin.partition('_')[0]
         kind = 'csv' if csv else 'netcdf'
         ext = 'csv' if csv else 'nc'
         path = data_dir / 'timeseries' / kind / subdataset / f'{basin}.{ext}'
-        if path.is_file():
+        if check_file(path):
             return path
         raise FileNotFoundError(f'No basin file found at {path}.')
 
@@ -215,7 +243,14 @@ def load_caravan_timeseries_together(
     open_dataset_args = {'chunks': {'date': 'auto'}, 'engine': 'netcdf4'}
 
     def open_dataset(ds_path: Path) -> tuple[xarray.Dataset, float, float]:
-        ds = select(xarray.open_dataset(ds_path, **open_dataset_args))
+        path_str = str(ds_path)
+        if path_str.startswith('/cns/'):
+            from googlehydrology.utils.gfile_utils import get_gfile
+            gfile = get_gfile()
+            with gfile.GFile(path_str, 'rb') as f:
+                ds = select(xarray.open_dataset(f.read(), engine='netcdf4').load())
+        else:
+            ds = select(xarray.open_dataset(ds_path, **open_dataset_args))
         first_date, last_date = ds['date'].isel(date=[0, -1]).data
         return ds, first_date, last_date
 
@@ -255,7 +290,14 @@ def _load_attribute_files_of_subdatasets(
 
     @dask.delayed
     def process(csv_file: Path) -> xarray.Dataset:
-        df64 = pd.read_csv(csv_file, index_col='gauge_id')
+        csv_str = str(csv_file)
+        if csv_str.startswith('/cns/'):
+            from googlehydrology.utils.gfile_utils import get_gfile
+            gfile = get_gfile()
+            with gfile.GFile(csv_str, 'r') as f:
+                df64 = pd.read_csv(f, index_col='gauge_id')
+        else:
+            df64 = pd.read_csv(csv_file, index_col='gauge_id')
         df = df64.astype(
             {
                 col: np.float32
@@ -267,14 +309,21 @@ def _load_attribute_files_of_subdatasets(
             df.drop(
                 columns=(e for e in df.columns if e not in features), inplace=True
             )
-        return df.to_xarray().chunk(
-            'auto'
-        )  # Uses underlying numpy arrays in df
+        return df.to_xarray().chunk('auto')
 
-    dss = map(
-        process,
-        itertools.chain.from_iterable(e.glob('*.csv') for e in datasets),
-    )
+    def get_csv_files(dataset_dirs: list[Path]) -> list[Path]:
+        csv_files = []
+        for d in dataset_dirs:
+            d_str = str(d)
+            if d_str.startswith('/cns/'):
+                from googlehydrology.utils.gfile_utils import get_gfile
+                gfile = get_gfile()
+                csv_files.extend([Path(p) for p in gfile.Glob(f"{d_str}/*.csv")])
+            else:
+                csv_files.extend(list(d.glob('*.csv')))
+        return csv_files
+
+    dss = map(process, get_csv_files(datasets))
     dss = dask.compute(*dss)
 
     return xarray.merge(dss, join='outer', compat='no_conflicts')
