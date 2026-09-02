@@ -1,4 +1,4 @@
-"""Simple Data Assimilation (DA) state updating for hydrological forecasting models."""
+"""Unified Data Assimilation (DA) engine for hydrological forecasting models."""
 
 import logging
 import re
@@ -11,11 +11,14 @@ import torch.nn as nn
 
 from googlehydrology.evaluation.metrics import calculate_metrics, get_available_metrics
 from googlehydrology.modelzoo.basemodel import BaseModel
-from googlehydrology.modelzoo.head import calc_cmal_mean
+from googlehydrology.modelzoo.head import calc_cmal_mean, ensure_y_hat
 from googlehydrology.training import get_loss_obj, get_optimizer, get_regularization_obj
 from googlehydrology.utils.assimilationconfig import AssimilationConfig
 
 logger = logging.getLogger(__name__)
+
+# Backward-compatibility alias
+_ensure_y_hat = ensure_y_hat
 
 
 def _copy_data_dict(d: dict) -> dict:
@@ -46,31 +49,6 @@ def _infer_seq_len(d: dict) -> int | None:
     return None
 
 
-def _ensure_y_hat(pred: Any) -> Dict[str, Any]:
-    """Ensures prediction output dictionary contains 'y_hat'."""
-    if not isinstance(pred, dict):
-        return {'y_hat': pred}
-    res = dict(pred)
-    if 'y_hat' not in res:
-        if 'mu' in res and 'pi' in res and 'b' in res and 'tau' in res and isinstance(res['mu'], torch.Tensor):
-            res['y_hat'] = calc_cmal_mean(res['mu'], res['b'], res['tau'], res['pi'])
-        elif 'mu' in res and 'pi' in res:
-            res['y_hat'] = torch.sum(res['pi'] * res['mu'], dim=-1, keepdim=True)
-        elif 'mu' in res:
-            mu = res['mu']
-            if isinstance(mu, torch.Tensor):
-                if mu.ndim == 3 and mu.shape[-1] > 1:
-                    res['y_hat'] = torch.mean(mu, dim=-1, keepdim=True)
-                else:
-                    res['y_hat'] = mu if mu.ndim == 3 else mu.unsqueeze(-1)
-            elif isinstance(mu, np.ndarray):
-                if mu.ndim == 3 and mu.shape[-1] > 1:
-                    res['y_hat'] = np.mean(mu, axis=-1, keepdims=True)
-                else:
-                    res['y_hat'] = mu if mu.ndim == 3 else np.expand_dims(mu, -1)
-    return res
-
-
 def _get_var_lr(lr_cfg: Any, var_name: str) -> float:
     """Retrieves target-specific learning rate from lr_cfg."""
     if isinstance(lr_cfg, dict):
@@ -92,7 +70,7 @@ def _slice_hydrology_batch(d: dict, slice_start: int, slice_end: int) -> dict:
         'x_s', 'x_one_hot', 'static_features',
         'c_n', 'h_n', 'c_0', 'h_0',
         'c_0_hindcast', 'h_0_hindcast', 'c_0_forecast', 'h_0_forecast',
-        'last_prediction'
+        'last_prediction', 'static_embedding',
     }
     h_len, f_len = None, None
     if 'x_d_hindcast' in d and isinstance(d['x_d_hindcast'], dict):
@@ -146,7 +124,7 @@ class _FrozenModelContext:
 
 
 class Assimilation(object):
-    """Fast 4D-Var state updating with inline diagnostic logging for MeanEmbeddingForecastLSTM."""
+    """Unified Data Assimilation (DA) state and parameter updating for hydrological forecasting models."""
 
     def __init__(self, cfg: AssimilationConfig):
         self.cfg = cfg
@@ -213,6 +191,25 @@ class Assimilation(object):
         opt_h_fc = any(k in self.targets for k in ['h_n_forecast', 'h_0_forecast', 'h_fc', 'h_n', 'h_0'])
         return opt_c_hc, opt_h_hc, opt_c_fc, opt_h_fc
 
+    def _detect_da_type(self) -> str:
+        """Determines the DA mode from self.targets: 'embedding', 'precip', or 'state'."""
+        targets = [str(t).lower() for t in self.targets] if isinstance(self.targets, (list, tuple)) else [str(self.targets).lower()]
+        target_str = ' '.join(targets)
+        if any(k in target_str for k in ['embedded', 'embedding', 'static_embedding', 'hindcast_embedding', 'forecast_embedding']):
+            return 'embedding'
+        elif any(k in target_str for k in ['precip', 'precipitation', 'forcing', 'rain', 'tp']):
+            return 'precip'
+        return 'state'
+
+    def _parse_embedding_masks(self) -> Tuple[bool, bool, bool]:
+        """Returns (mask_e_stat, mask_e_dyn, mask_e_fc) based on configured targets."""
+        targets = [str(t).lower() for t in self.targets] if isinstance(self.targets, (list, tuple)) else [str(self.targets).lower()]
+        target_str = ' '.join(targets)
+        mask_e_stat = any(k in target_str for k in ['stat', 'both', 'all', 'embedding'])
+        mask_e_dyn = any(k in target_str for k in ['dyn', 'both', 'all', 'temporal', 'hc', 'hindcast'])
+        mask_e_fc = any(k in target_str for k in ['all', 'three', 'fc', 'forecast'])
+        return mask_e_stat, mask_e_dyn, mask_e_fc
+
     def _extract_state_tensor(self, state_val: Optional[torch.Tensor], t_idx: int) -> Optional[torch.Tensor]:
         if state_val is None:
             return None
@@ -227,6 +224,10 @@ class Assimilation(object):
         self.validate_data_structure(data)
         if kwargs.get('check_timing', False) or verbose:
             self.check_discharge_timing(data, verbose=verbose)
+
+        da_type = self._detect_da_type()
+        mask_e_stat, mask_e_dyn, mask_e_fc = self._parse_embedding_masks() if da_type == 'embedding' else (False, False, False)
+        opt_c_hc, opt_h_hc, opt_c_fc, opt_h_fc = self._parse_target_flags()
 
         with _FrozenModelContext(model):
             y_tensor = data['y'] if data['y'].ndim == 3 else data['y'].unsqueeze(-1)
@@ -254,7 +255,6 @@ class Assimilation(object):
 
             target_key = self.targets[0] if self.targets else 'c_n'
             lr = _get_var_lr(self.cfg.learning_rate, target_key)
-            opt_c_hc, opt_h_hc, opt_c_fc, opt_h_fc = self._parse_target_flags()
 
             c_user = data.get('c_0', data.get('c_n', None))
             h_user = data.get('h_0', data.get('h_n', None))
@@ -262,13 +262,14 @@ class Assimilation(object):
             # =========================================================================
             # PHASE 1: Warmup Phase (0 -> a_start)
             # =========================================================================
+            static_embedding_opt = None
             if a_start > 0:
                 warmup_data = _slice_hydrology_batch(data, 0, a_start)
                 if c_user is not None: warmup_data['c_0'] = c_user
                 if h_user is not None: warmup_data['h_0'] = h_user
 
                 with torch.no_grad():
-                    warmup_out = _ensure_y_hat(model(warmup_data))
+                    warmup_out = ensure_y_hat(model(warmup_data), use_median=True)
                     base_y_warmup = warmup_out['y_hat']
                     if base_y_warmup.ndim == 2:
                         base_y_warmup = base_y_warmup.unsqueeze(-1)
@@ -295,8 +296,13 @@ class Assimilation(object):
 
             last_prediction_curr = data.get('last_prediction', None)
 
+            last_e_stat = None
+            last_e_dyn = None
+            last_e_fc = None
+            last_p_opt = None
+
             # =========================================================================
-            # PHASE 2: Sequential Window 4D-Var Optimization (a_start -> a_end)
+            # PHASE 2: Sequential Window Optimization (a_start -> a_end)
             # =========================================================================
             curr_idx = a_start
             for w_idx in range(self.history):
@@ -305,103 +311,268 @@ class Assimilation(object):
                 win_len = w_end - curr_idx
 
                 chunk_data = _slice_hydrology_batch(data, curr_idx, w_end)
+                chunk_data['c_0_hindcast'] = c_hc_curr
+                chunk_data['h_0_hindcast'] = h_hc_curr
+                chunk_data['c_0_forecast'] = c_fc_curr
+                chunk_data['h_0_forecast'] = h_fc_curr
+                chunk_data['c_0'] = c_hc_curr
+                chunk_data['h_0'] = h_hc_curr
+                chunk_data['c_n'] = c_hc_curr
+                chunk_data['h_n'] = h_hc_curr
+                if static_embedding_opt is not None:
+                    chunk_data['static_embedding'] = static_embedding_opt
+                if last_prediction_curr is not None:
+                    chunk_data['last_prediction'] = last_prediction_curr
 
-                c_hc_opt = c_hc_curr.clone().detach().requires_grad_(True) if (opt_c_hc and c_hc_curr is not None) else (c_hc_curr.clone().detach() if c_hc_curr is not None else None)
-                h_hc_opt = h_hc_curr.clone().detach().requires_grad_(True) if (opt_h_hc and h_hc_curr is not None) else (h_hc_curr.clone().detach() if h_hc_curr is not None else None)
-                c_fc_opt = c_fc_curr.clone().detach().requires_grad_(True) if (opt_c_fc and c_fc_curr is not None) else (c_fc_curr.clone().detach() if c_fc_curr is not None else None)
-                h_fc_opt = h_fc_curr.clone().detach().requires_grad_(True) if (opt_h_fc and h_fc_curr is not None) else (h_fc_curr.clone().detach() if h_fc_curr is not None else None)
+                # -------------------------------------------------------------
+                # 2A. EMBEDDED DATA ASSIMILATION
+                # -------------------------------------------------------------
+                if da_type == 'embedding':
+                    with torch.no_grad():
+                        pre_pred = ensure_y_hat(model(chunk_data), use_median=True)
+                        p_pre_sub = pre_pred['y_hat'][:, :win_len, :]
+                        if p_pre_sub.ndim == 2: p_pre_sub = p_pre_sub.unsqueeze(-1)
+                        p_pre_chunks.append(p_pre_sub)
 
-                opt_vars = [p for p in (c_hc_opt, h_hc_opt, c_fc_opt, h_fc_opt) if p is not None and p.requires_grad]
+                        e_stat_base = pre_pred['static_embedding']
+                        e_dyn_base = pre_pred['hindcast_embedding']
+                        e_fc_base = pre_pred['forecast_embedding']
 
-                # Capture unassimilated baseline prediction for this window
-                with torch.no_grad():
-                    chunk_data['c_0_hindcast'] = c_hc_curr
-                    chunk_data['h_0_hindcast'] = h_hc_curr
-                    chunk_data['c_0_forecast'] = c_fc_curr
-                    chunk_data['h_0_forecast'] = h_fc_curr
-                    chunk_data['c_0'] = c_hc_curr
-                    chunk_data['h_0'] = h_hc_curr
-                    chunk_data['c_n'] = c_hc_curr
-                    chunk_data['h_n'] = h_hc_curr
-                    if last_prediction_curr is not None:
-                        chunk_data['last_prediction'] = last_prediction_curr
-                    pre_pred = _ensure_y_hat(model(chunk_data))
-                    p_pre_sub = pre_pred['y_hat'][:, :win_len, :]
-                    if p_pre_sub.ndim == 2: p_pre_sub = p_pre_sub.unsqueeze(-1)
-                    p_pre_chunks.append(p_pre_sub)
+                    e_stat_opt = e_stat_base.clone().detach().requires_grad_(True) if mask_e_stat else e_stat_base
+                    e_dyn_opt = e_dyn_base.clone().detach().requires_grad_(True) if mask_e_dyn else e_dyn_base
+                    e_fc_opt = e_fc_base.clone().detach().requires_grad_(True) if mask_e_fc else e_fc_base
+                    opt_vars = [p for p in (e_stat_opt, e_dyn_opt, e_fc_opt) if p is not None and p.requires_grad]
 
-                if opt_vars:
-                    optimizer = get_optimizer(opt_vars, self.cfg)
-                    for pg in optimizer.param_groups: pg["lr"] = lr
+                    if opt_vars:
+                        optimizer = get_optimizer(opt_vars, self.cfg)
+                        for pg in optimizer.param_groups: pg["lr"] = lr
+                        bg_stat_w = getattr(self.cfg, 'bg_stat_weight', 1e-6)
+                        bg_dyn_w = getattr(self.cfg, 'bg_dyn_weight', getattr(self.cfg, 'regularization_weight', 0.01))
 
-                    for epoch in range(self.epochs):
-                        optimizer.zero_grad()
+                        for epoch in range(self.epochs):
+                            optimizer.zero_grad()
+                            chunk_data['static_embedding'] = e_stat_opt
+                            chunk_data['hindcast_embedding'] = e_dyn_opt
+                            chunk_data['forecast_embedding'] = e_fc_opt
+                            chunk_data['c_0_hindcast'] = c_hc_curr
+                            chunk_data['h_0_hindcast'] = h_hc_curr
+                            chunk_data['c_0_forecast'] = c_fc_curr
+                            chunk_data['h_0_forecast'] = h_fc_curr
+                            if last_prediction_curr is not None:
+                                chunk_data['last_prediction'] = last_prediction_curr
 
-                        chunk_data['c_0_hindcast'] = c_hc_opt
-                        chunk_data['h_0_hindcast'] = h_hc_opt
-                        chunk_data['c_0_forecast'] = c_fc_opt
-                        chunk_data['h_0_forecast'] = h_fc_opt
-                        chunk_data['c_0'] = c_hc_opt if opt_c_hc else (c_fc_opt if opt_c_fc else c_hc_opt)
-                        chunk_data['h_0'] = h_hc_opt if opt_h_hc else (h_fc_opt if opt_h_fc else h_hc_opt)
+                            pred_dict = ensure_y_hat(model(chunk_data), use_median=False)
+                            p_sub = pred_dict['y_hat'][:, :win_len, :]
+                            if p_sub.ndim == 2: p_sub = p_sub.unsqueeze(-1)
+                            t_sub = chunk_data['y'][:, :win_len, :]
+
+                            mask = ~torch.isnan(t_sub) & ~torch.isnan(p_sub)
+                            if mask.any():
+                                loss = torch.mean((p_sub[mask] - t_sub[mask]) ** 2)
+                                reg_loss = 0.0
+                                if mask_e_stat and e_stat_opt.requires_grad:
+                                    reg_loss = reg_loss + bg_stat_w * torch.sum((e_stat_opt - e_stat_base) ** 2)
+                                if mask_e_dyn and e_dyn_opt.requires_grad:
+                                    reg_loss = reg_loss + bg_dyn_w * torch.sum((e_dyn_opt - e_dyn_base) ** 2)
+                                if mask_e_fc and e_fc_opt.requires_grad:
+                                    reg_loss = reg_loss + bg_dyn_w * torch.sum((e_fc_opt - e_fc_base) ** 2)
+                                loss = loss + reg_loss
+
+                                if torch.isfinite(loss) and loss.requires_grad:
+                                    loss.backward()
+                                    if getattr(self.cfg, 'clip_gradient_norm', 0) > 0:
+                                        torch.nn.utils.clip_grad_norm_(opt_vars, self.cfg.clip_gradient_norm)
+                                    optimizer.step()
+
+                    with torch.no_grad():
+                        chunk_data['static_embedding'] = e_stat_opt.detach()
+                        chunk_data['hindcast_embedding'] = e_dyn_opt.detach()
+                        chunk_data['forecast_embedding'] = e_fc_opt.detach()
+                        rollout = ensure_y_hat(model(chunk_data), use_median=True)
+                        if 'last_prediction' in rollout:
+                            last_prediction_curr = rollout['last_prediction']
+
+                        p_roll = rollout['y_hat'][:, :win_len, :]
+                        if p_roll.ndim == 2: p_roll = p_roll.unsqueeze(-1)
+                        y_chunks.append(p_roll)
+
+                        for key in ['mu', 'b', 'tau', 'pi']:
+                            if key in rollout and isinstance(rollout[key], torch.Tensor):
+                                dist_chunks[key].append(rollout[key][:, :win_len, ...])
+
+                        c_hc_curr = rollout.get('c_n_hindcast', rollout.get('c_n'))
+                        h_hc_curr = rollout.get('h_n_hindcast', rollout.get('h_n'))
+                        c_fc_curr = rollout.get('c_n_forecast', rollout.get('c_n', c_hc_curr))
+                        h_fc_curr = rollout.get('h_n_forecast', rollout.get('h_n', h_hc_curr))
+                        static_embedding_opt = e_stat_opt.detach()
+                        last_e_stat = e_stat_opt.detach()
+                        last_e_dyn = e_dyn_opt.detach()
+                        last_e_fc = e_fc_opt.detach()
+
+                # -------------------------------------------------------------
+                # 2B. PRECIPITATION FORCING DATA ASSIMILATION
+                # -------------------------------------------------------------
+                elif da_type == 'precip':
+                    with torch.no_grad():
+                        pre_pred = ensure_y_hat(model(chunk_data), use_median=True)
+                        p_pre_sub = pre_pred['y_hat'][:, :win_len, :]
+                        if p_pre_sub.ndim == 2: p_pre_sub = p_pre_sub.unsqueeze(-1)
+                        p_pre_chunks.append(p_pre_sub)
+
+                    hind_dict = chunk_data.get('x_d_hindcast', chunk_data.get('x_d', None))
+                    precip_key = None
+                    if isinstance(hind_dict, dict):
+                        for k in hind_dict.keys():
+                            if any(p in k.lower() for p in ['precip', 'tp', 'prcp', 'rain']):
+                                precip_key = k
+                                break
+                        if precip_key is None and hind_dict:
+                            precip_key = list(hind_dict.keys())[0]
+
+                    precip_base = hind_dict[precip_key] if (hind_dict and precip_key in hind_dict) else None
+                    if precip_base is not None and isinstance(precip_base, torch.Tensor):
+                        precip_opt = precip_base.clone().detach().requires_grad_(True)
+                        opt_vars = [precip_opt]
+                        optimizer = get_optimizer(opt_vars, self.cfg)
+                        for pg in optimizer.param_groups: pg["lr"] = lr
+                        min_clip = getattr(self.cfg, 'precip_min_clip', -3.0)
+
+                        for epoch in range(self.epochs):
+                            optimizer.zero_grad()
+                            hind_dict[precip_key] = precip_opt
+                            chunk_data['c_0_hindcast'] = c_hc_curr
+                            chunk_data['h_0_hindcast'] = h_hc_curr
+                            chunk_data['c_0_forecast'] = c_fc_curr
+                            chunk_data['h_0_forecast'] = h_fc_curr
+                            if last_prediction_curr is not None:
+                                chunk_data['last_prediction'] = last_prediction_curr
+
+                            pred_dict = ensure_y_hat(model(chunk_data), use_median=False)
+                            p_sub = pred_dict['y_hat'][:, :win_len, :]
+                            if p_sub.ndim == 2: p_sub = p_sub.unsqueeze(-1)
+                            t_sub = chunk_data['y'][:, :win_len, :]
+
+                            mask = ~torch.isnan(t_sub) & ~torch.isnan(p_sub)
+                            if mask.any():
+                                loss = torch.mean((p_sub[mask] - t_sub[mask]) ** 2)
+                                if torch.isfinite(loss) and loss.requires_grad:
+                                    loss.backward()
+                                    if getattr(self.cfg, 'clip_gradient_norm', 0) > 0:
+                                        torch.nn.utils.clip_grad_norm_(opt_vars, self.cfg.clip_gradient_norm)
+                                    optimizer.step()
+                                    with torch.no_grad():
+                                        precip_opt.clamp_(min=min_clip)
+
+                        with torch.no_grad():
+                            hind_dict[precip_key] = precip_opt.detach()
+                            last_p_opt = precip_opt.detach()
+
+                    with torch.no_grad():
+                        rollout = ensure_y_hat(model(chunk_data), use_median=True)
+                        if 'last_prediction' in rollout:
+                            last_prediction_curr = rollout['last_prediction']
+
+                        p_roll = rollout['y_hat'][:, :win_len, :]
+                        if p_roll.ndim == 2: p_roll = p_roll.unsqueeze(-1)
+                        y_chunks.append(p_roll)
+
+                        for key in ['mu', 'b', 'tau', 'pi']:
+                            if key in rollout and isinstance(rollout[key], torch.Tensor):
+                                dist_chunks[key].append(rollout[key][:, :win_len, ...])
+
+                        c_hc_curr = rollout.get('c_n_hindcast', rollout.get('c_n'))
+                        h_hc_curr = rollout.get('h_n_hindcast', rollout.get('h_n'))
+                        c_fc_curr = rollout.get('c_n_forecast', rollout.get('c_n', c_hc_curr))
+                        h_fc_curr = rollout.get('h_n_forecast', rollout.get('h_n', h_hc_curr))
+
+                # -------------------------------------------------------------
+                # 2C. RECURRENT STATE DATA ASSIMILATION (DEFAULT)
+                # -------------------------------------------------------------
+                else:
+                    c_hc_opt = c_hc_curr.clone().detach().requires_grad_(True) if (opt_c_hc and c_hc_curr is not None) else (c_hc_curr.clone().detach() if c_hc_curr is not None else None)
+                    h_hc_opt = h_hc_curr.clone().detach().requires_grad_(True) if (opt_h_hc and h_hc_curr is not None) else (h_hc_curr.clone().detach() if h_hc_curr is not None else None)
+                    c_fc_opt = c_fc_curr.clone().detach().requires_grad_(True) if (opt_c_fc and c_fc_curr is not None) else (c_fc_curr.clone().detach() if c_fc_curr is not None else None)
+                    h_fc_opt = h_fc_curr.clone().detach().requires_grad_(True) if (opt_h_fc and h_fc_curr is not None) else (h_fc_curr.clone().detach() if h_fc_curr is not None else None)
+
+                    opt_vars = [p for p in (c_hc_opt, h_hc_opt, c_fc_opt, h_fc_opt) if p is not None and p.requires_grad]
+
+                    with torch.no_grad():
+                        pre_pred = ensure_y_hat(model(chunk_data), use_median=True)
+                        p_pre_sub = pre_pred['y_hat'][:, :win_len, :]
+                        if p_pre_sub.ndim == 2: p_pre_sub = p_pre_sub.unsqueeze(-1)
+                        p_pre_chunks.append(p_pre_sub)
+
+                    if opt_vars:
+                        optimizer = get_optimizer(opt_vars, self.cfg)
+                        for pg in optimizer.param_groups: pg["lr"] = lr
+
+                        for epoch in range(self.epochs):
+                            optimizer.zero_grad()
+
+                            chunk_data['c_0_hindcast'] = c_hc_opt
+                            chunk_data['h_0_hindcast'] = h_hc_opt
+                            chunk_data['c_0_forecast'] = c_fc_opt
+                            chunk_data['h_0_forecast'] = h_fc_opt
+                            chunk_data['c_0'] = c_hc_opt if opt_c_hc else (c_fc_opt if opt_c_fc else c_hc_opt)
+                            chunk_data['h_0'] = h_hc_opt if opt_h_hc else (h_fc_opt if opt_h_fc else h_hc_opt)
+                            chunk_data['c_n'] = chunk_data['c_0']
+                            chunk_data['h_n'] = chunk_data['h_0']
+                            if last_prediction_curr is not None:
+                                chunk_data['last_prediction'] = last_prediction_curr
+
+                            pred_dict = ensure_y_hat(model(chunk_data), use_median=False)
+                            p_sub = pred_dict['y_hat'][:, :win_len, :]
+                            if p_sub.ndim == 2: p_sub = p_sub.unsqueeze(-1)
+                            t_sub = chunk_data['y'][:, :win_len, :]
+
+                            mask = ~torch.isnan(t_sub) & ~torch.isnan(p_sub)
+                            if mask.any():
+                                loss = torch.mean((p_sub[mask] - t_sub[mask]) ** 2)
+                                reg_weight = getattr(self.cfg, 'bg_regularization_weight', getattr(self.cfg, 'regularization_weight', 0.0)) or 0.0
+                                if reg_weight > 0:
+                                    reg_loss = 0.0
+                                    if opt_c_hc and c_hc_curr is not None: reg_loss = reg_loss + torch.sum((c_hc_opt - c_hc_curr) ** 2)
+                                    if opt_h_hc and h_hc_curr is not None: reg_loss = reg_loss + torch.sum((h_hc_opt - h_hc_curr) ** 2)
+                                    if opt_c_fc and c_fc_curr is not None: reg_loss = reg_loss + torch.sum((c_fc_opt - c_fc_curr) ** 2)
+                                    if opt_h_fc and h_fc_curr is not None: reg_loss = reg_loss + torch.sum((h_fc_opt - h_fc_curr) ** 2)
+                                    loss = loss + reg_weight * reg_loss
+
+                                if torch.isfinite(loss) and loss.requires_grad:
+                                    loss.backward()
+                                    if getattr(self.cfg, 'clip_gradient_norm', 0) > 0:
+                                        torch.nn.utils.clip_grad_norm_(opt_vars, self.cfg.clip_gradient_norm)
+                                    optimizer.step()
+                            else:
+                                logger.debug('Window [%d:%d] contains 0 valid target observations. Bypassing gradient update.', curr_idx, w_end)
+
+                    with torch.no_grad():
+                        chunk_data['c_0_hindcast'] = c_hc_opt.detach() if c_hc_opt is not None else None
+                        chunk_data['h_0_hindcast'] = h_hc_opt.detach() if h_hc_opt is not None else None
+                        chunk_data['c_0_forecast'] = c_fc_opt.detach() if c_fc_opt is not None else None
+                        chunk_data['h_0_forecast'] = h_fc_opt.detach() if h_fc_opt is not None else None
+                        chunk_data['c_0'] = chunk_data['c_0_hindcast']
+                        chunk_data['h_0'] = chunk_data['h_0_hindcast']
                         chunk_data['c_n'] = chunk_data['c_0']
                         chunk_data['h_n'] = chunk_data['h_0']
                         if last_prediction_curr is not None:
                             chunk_data['last_prediction'] = last_prediction_curr
 
-                        pred_dict = _ensure_y_hat(model(chunk_data))
-                        p_sub = pred_dict['y_hat'][:, :win_len, :]
-                        if p_sub.ndim == 2: p_sub = p_sub.unsqueeze(-1)
-                        t_sub = chunk_data['y'][:, :win_len, :]
+                        rollout = ensure_y_hat(model(chunk_data), use_median=True)
+                        if 'last_prediction' in rollout:
+                            last_prediction_curr = rollout['last_prediction']
 
-                        mask = ~torch.isnan(t_sub) & ~torch.isnan(p_sub)
-                        if mask.any():
-                            loss = torch.mean((p_sub[mask] - t_sub[mask]) ** 2)
-                            reg_weight = getattr(self.cfg, 'bg_regularization_weight', getattr(self.cfg, 'regularization_weight', 0.0)) or 0.0
-                            if reg_weight > 0:
-                                reg_loss = 0.0
-                                if opt_c_hc and c_hc_curr is not None: reg_loss = reg_loss + torch.sum((c_hc_opt - c_hc_curr) ** 2)
-                                if opt_h_hc and h_hc_curr is not None: reg_loss = reg_loss + torch.sum((h_hc_opt - h_hc_curr) ** 2)
-                                if opt_c_fc and c_fc_curr is not None: reg_loss = reg_loss + torch.sum((c_fc_opt - c_fc_curr) ** 2)
-                                if opt_h_fc and h_fc_curr is not None: reg_loss = reg_loss + torch.sum((h_fc_opt - h_fc_curr) ** 2)
-                                loss = loss + reg_weight * reg_loss
+                        p_roll = rollout['y_hat'][:, :win_len, :]
+                        if p_roll.ndim == 2: p_roll = p_roll.unsqueeze(-1)
+                        y_chunks.append(p_roll)
 
-                            if torch.isfinite(loss) and loss.requires_grad:
-                                loss.backward()
-                                if getattr(self.cfg, 'clip_gradient_norm', 0) > 0:
-                                    torch.nn.utils.clip_grad_norm_(opt_vars, self.cfg.clip_gradient_norm)
-                                optimizer.step()
-                        else:
-                            logger.debug('Window [%d:%d] contains 0 valid target observations. Bypassing gradient update.', curr_idx, w_end)
+                        for key in ['mu', 'b', 'tau', 'pi']:
+                            if key in rollout and isinstance(rollout[key], torch.Tensor):
+                                dist_chunks[key].append(rollout[key][:, :win_len, ...])
 
-                # Rollout & State Handoff
-                with torch.no_grad():
-                    chunk_data['c_0_hindcast'] = c_hc_opt.detach() if c_hc_opt is not None else None
-                    chunk_data['h_0_hindcast'] = h_hc_opt.detach() if h_hc_opt is not None else None
-                    chunk_data['c_0_forecast'] = c_fc_opt.detach() if c_fc_opt is not None else None
-                    chunk_data['h_0_forecast'] = h_fc_opt.detach() if h_fc_opt is not None else None
-                    chunk_data['c_0'] = chunk_data['c_0_hindcast']
-                    chunk_data['h_0'] = chunk_data['h_0_hindcast']
-                    chunk_data['c_n'] = chunk_data['c_0']
-                    chunk_data['h_n'] = chunk_data['h_0']
-                    if last_prediction_curr is not None:
-                        chunk_data['last_prediction'] = last_prediction_curr
-
-                    rollout = _ensure_y_hat(model(chunk_data))
-                    if 'last_prediction' in rollout:
-                        last_prediction_curr = rollout['last_prediction']
-
-                    p_roll = rollout['y_hat'][:, :win_len, :]
-                    if p_roll.ndim == 2: p_roll = p_roll.unsqueeze(-1)
-                    y_chunks.append(p_roll)
-
-                    for key in ['mu', 'b', 'tau', 'pi']:
-                        if key in rollout and isinstance(rollout[key], torch.Tensor):
-                            dist_chunks[key].append(rollout[key][:, :win_len, ...])
-
-                    c_hc_curr = rollout.get('c_n_hindcast', rollout.get('c_n'))
-                    h_hc_curr = rollout.get('h_n_hindcast', rollout.get('h_n'))
-                    c_fc_curr = rollout.get('c_n_forecast', rollout.get('c_n', c_hc_curr))
-                    h_fc_curr = rollout.get('h_n_forecast', rollout.get('h_n', h_hc_curr))
+                        c_hc_curr = rollout.get('c_n_hindcast', rollout.get('c_n'))
+                        h_hc_curr = rollout.get('h_n_hindcast', rollout.get('h_n'))
+                        c_fc_curr = rollout.get('c_n_forecast', rollout.get('c_n', c_hc_curr))
+                        h_fc_curr = rollout.get('h_n_forecast', rollout.get('h_n', h_hc_curr))
 
                 curr_idx = w_end
 
@@ -419,10 +590,12 @@ class Assimilation(object):
                     fc_data['h_0'] = h_fc_curr
                     fc_data['c_n'] = c_fc_curr
                     fc_data['h_n'] = h_fc_curr
+                    if static_embedding_opt is not None:
+                        fc_data['static_embedding'] = static_embedding_opt
                     if last_prediction_curr is not None:
                         fc_data['last_prediction'] = last_prediction_curr
 
-                    fc_pred = _ensure_y_hat(model(fc_data))
+                    fc_pred = ensure_y_hat(model(fc_data), use_median=True)
                     fc_y = fc_pred['y_hat'][:, :(total_len - curr_idx), :]
                     if fc_y.ndim == 2: fc_y = fc_y.unsqueeze(-1)
                     y_chunks.append(fc_y)
@@ -480,6 +653,13 @@ class Assimilation(object):
                 'hindcast_metrics_pre': metrics_pre,
                 'hindcast_metrics_post': metrics_post,
             }
+            if da_type == 'embedding':
+                if last_e_stat is not None: res['static_embedding'] = last_e_stat
+                if last_e_dyn is not None: res['hindcast_embedding'] = last_e_dyn
+                if last_e_fc is not None: res['forecast_embedding'] = last_e_fc
+            elif da_type == 'precip' and last_p_opt is not None:
+                res['precip'] = last_p_opt
+
             for key, chunks in dist_chunks.items():
                 if chunks:
                     res[key] = torch.cat(chunks, dim=1)[:, :total_len, ...]

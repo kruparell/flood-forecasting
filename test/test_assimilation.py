@@ -646,6 +646,125 @@ class AssimilationTest(unittest.TestCase):
         assim.assimilate(model, data, verbose=False)
         self.assertTrue(all(p.requires_grad for p in model.parameters()))
 
+    def _create_mef_model_and_data(self, hidden_size=16, seq_length=14, lead_time=2):
+        from googlehydrology.utils.config import Config
+        from googlehydrology.modelzoo.mean_embedding_forecast_lstm import MeanEmbeddingForecastLSTM
+        cfg_dict = {
+            'model': 'mean_embedding_forecast_lstm',
+            'head': 'regression',
+            'hidden_size': hidden_size,
+            'seq_length': seq_length,
+            'lead_time': lead_time,
+            'predict_last_n': lead_time,
+            'target_variables': ['streamflow'],
+            'static_attributes': ['area'],
+            'statics_embedding': {'type': 'fc', 'hiddens': [8], 'activation': 'tanh', 'dropout': 0.0},
+            'dynamics_embedding': {'type': 'fc', 'hiddens': [8], 'activation': 'tanh', 'dropout': 0.0},
+            'hindcast_inputs': ['era5_precip'],
+            'forecast_inputs': ['hres_precip'],
+            'compile': False,
+            'dev_mode': True,
+        }
+        cfg = Config(cfg_dict, dev_mode=True)
+        model = MeanEmbeddingForecastLSTM(cfg=cfg)
+        data = {
+            'x_s': torch.ones(1, 1),
+            'x_d_hindcast': {'era5_precip': torch.randn(1, seq_length - lead_time, 1)},
+            'x_d_forecast': {'hres_precip': torch.randn(1, seq_length, 1)},
+            'y': torch.ones(1, seq_length, 1) * 2.0,
+        }
+        return model, data
+
+    @patch('googlehydrology.modelzoo.basemodel.Scaler')
+    def test_itemised_type1_recurrent_state_da_with_mean_embedding_forecast_lstm(self, mock_scaler):
+        """Itemised Test: Type 1 Recurrent State DA with MeanEmbeddingForecastLSTM."""
+        model, data = self._create_mef_model_and_data()
+        da_cfg_dict = {
+            'seq_length': 14,
+            'history': 2,
+            'assimilation_window': 1,
+            'assimilation_lead_time': 2,
+            'learning_rate': 0.05,
+            'epochs': 5,
+            'loss': 'MSE',
+            'optimizer': 'Adam',
+            'assimilation_targets': ['c_n_hindcast', 'h_n_hindcast'],
+            'target_variables': ['streamflow'],
+            'predict_last_n': 2,
+        }
+        da_cfg = AssimilationConfig(da_cfg_dict)
+        assim = Assimilation(da_cfg)
+        res = assim.assimilate(model, data, verbose=False)
+        self.assertIn('y_hat', res)
+        self.assertEqual(res['y_hat'].shape[1], 14)
+        self.assertIn('c_n_hindcast', res)
+        self.assertIn('h_n_hindcast', res)
+        self.assertIsNotNone(res['c_n_hindcast'])
+        self.assertIsNotNone(res['h_n_hindcast'])
+        self.assertTrue(all(p.requires_grad for p in model.parameters()))
+        self.assertIn('hindcast_metrics_pre', res)
+        self.assertIn('hindcast_metrics_post', res)
+
+    @patch('googlehydrology.modelzoo.basemodel.Scaler')
+    def test_itemised_type2_embedded_all_da_with_mean_embedding_forecast_lstm(self, mock_scaler):
+        """Itemised Test: Type 2 Embedded DA (embedded_all: static, hindcast, forecast) with MeanEmbeddingForecastLSTM."""
+        model, data = self._create_mef_model_and_data()
+        da_cfg_dict = {
+            'seq_length': 14,
+            'history': 2,
+            'assimilation_window': 1,
+            'assimilation_lead_time': 2,
+            'learning_rate': 0.05,
+            'epochs': 5,
+            'loss': 'MSE',
+            'optimizer': 'Adam',
+            'assimilation_targets': ['embedded_all'],
+            'bg_stat_weight': 1e-4,
+            'bg_dyn_weight': 0.01,
+            'target_variables': ['streamflow'],
+            'predict_last_n': 2,
+        }
+        da_cfg = AssimilationConfig(da_cfg_dict)
+        assim = Assimilation(da_cfg)
+        res = assim.assimilate(model, data, verbose=False)
+        self.assertIn('y_hat', res)
+        self.assertEqual(res['y_hat'].shape[1], 14)
+        self.assertIn('static_embedding', res)
+        self.assertIn('hindcast_embedding', res)
+        self.assertIn('forecast_embedding', res)
+        self.assertIsNotNone(res['static_embedding'])
+        self.assertIsNotNone(res['hindcast_embedding'])
+        self.assertIsNotNone(res['forecast_embedding'])
+        self.assertTrue(all(p.requires_grad for p in model.parameters()))
+
+    @patch('googlehydrology.modelzoo.basemodel.Scaler')
+    def test_itemised_type3_precipitation_forcing_da_with_mean_embedding_forecast_lstm(self, mock_scaler):
+        """Itemised Test: Type 3 Precipitation Forcing DA with MeanEmbeddingForecastLSTM."""
+        model, data = self._create_mef_model_and_data()
+        da_cfg_dict = {
+            'seq_length': 14,
+            'history': 2,
+            'assimilation_window': 1,
+            'assimilation_lead_time': 2,
+            'learning_rate': 0.05,
+            'epochs': 5,
+            'loss': 'MSE',
+            'optimizer': 'Adam',
+            'assimilation_targets': ['precip'],
+            'precip_min_clip': -3.0,
+            'target_variables': ['streamflow'],
+            'predict_last_n': 2,
+        }
+        da_cfg = AssimilationConfig(da_cfg_dict)
+        assim = Assimilation(da_cfg)
+        res = assim.assimilate(model, data, verbose=False)
+        self.assertIn('y_hat', res)
+        self.assertEqual(res['y_hat'].shape[1], 14)
+        self.assertIn('precip', res)
+        self.assertIsNotNone(res['precip'])
+        self.assertTrue((res['precip'] >= -3.0).all())
+        self.assertTrue(all(p.requires_grad for p in model.parameters()))
+
 
 if __name__ == '__main__':
     unittest.main()
