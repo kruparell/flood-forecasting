@@ -300,6 +300,7 @@ class Assimilation(object):
             last_e_dyn = None
             last_e_fc = None
             last_p_opt = None
+            last_p_opts = None
 
             # =========================================================================
             # PHASE 2: Sequential Window Optimization (a_start -> a_end)
@@ -420,26 +421,41 @@ class Assimilation(object):
                         p_pre_chunks.append(p_pre_sub)
 
                     hind_dict = chunk_data.get('x_d_hindcast', chunk_data.get('x_d', None))
-                    precip_key = None
+                    precip_keys = []
                     if isinstance(hind_dict, dict):
-                        for k in hind_dict.keys():
-                            if any(p in k.lower() for p in ['precip', 'tp', 'prcp', 'rain']):
-                                precip_key = k
-                                break
-                        if precip_key is None and hind_dict:
-                            precip_key = list(hind_dict.keys())[0]
+                        cfg_keys = getattr(self.cfg, 'precip_forcing_keys', None)
+                        if cfg_keys is None:
+                            single_key = getattr(self.cfg, 'precip_forcing_key', None)
+                            if single_key:
+                                cfg_keys = [single_key] if isinstance(single_key, str) else list(single_key)
+                        if cfg_keys:
+                            precip_keys = [k for k in cfg_keys if k in hind_dict]
+                        else:
+                            precip_keys = [
+                                k for k in hind_dict.keys()
+                                if any(p in k.lower() for p in ['precip', 'tp', 'prcp', 'rain'])
+                            ]
+                        if not precip_keys:
+                            raise ValueError(
+                                "Precipitation DA ('precip') failed: no precipitation forcing key "
+                                f"found in hindcast inputs. Available keys: {list(hind_dict.keys())}."
+                            )
 
-                    precip_base = hind_dict[precip_key] if (hind_dict and precip_key in hind_dict) else None
-                    if precip_base is not None and isinstance(precip_base, torch.Tensor):
-                        precip_opt = precip_base.clone().detach().requires_grad_(True)
-                        opt_vars = [precip_opt]
+                    precip_opts = {
+                        k: hind_dict[k].clone().detach().requires_grad_(True)
+                        for k in precip_keys
+                        if isinstance(hind_dict.get(k), torch.Tensor)
+                    }
+                    if precip_opts:
+                        opt_vars = list(precip_opts.values())
                         optimizer = get_optimizer(opt_vars, self.cfg)
                         for pg in optimizer.param_groups: pg["lr"] = lr
                         min_clip = getattr(self.cfg, 'precip_min_clip', -3.0)
 
                         for epoch in range(self.epochs):
                             optimizer.zero_grad()
-                            hind_dict[precip_key] = precip_opt
+                            for k, p_opt in precip_opts.items():
+                                hind_dict[k] = p_opt
                             chunk_data['c_0_hindcast'] = c_hc_curr
                             chunk_data['h_0_hindcast'] = h_hc_curr
                             chunk_data['c_0_forecast'] = c_fc_curr
@@ -461,11 +477,14 @@ class Assimilation(object):
                                         torch.nn.utils.clip_grad_norm_(opt_vars, self.cfg.clip_gradient_norm)
                                     optimizer.step()
                                     with torch.no_grad():
-                                        precip_opt.clamp_(min=min_clip)
+                                        for p_opt in precip_opts.values():
+                                            p_opt.clamp_(min=min_clip)
 
                         with torch.no_grad():
-                            hind_dict[precip_key] = precip_opt.detach()
-                            last_p_opt = precip_opt.detach()
+                            for k, p_opt in precip_opts.items():
+                                hind_dict[k] = p_opt.detach()
+                            last_p_opt = precip_opts[precip_keys[0]].detach()
+                            last_p_opts = {k: p_opt.detach() for k, p_opt in precip_opts.items()}
 
                     with torch.no_grad():
                         rollout = ensure_y_hat(model(chunk_data), use_median=True)
@@ -659,6 +678,8 @@ class Assimilation(object):
                 if last_e_fc is not None: res['forecast_embedding'] = last_e_fc
             elif da_type == 'precip' and last_p_opt is not None:
                 res['precip'] = last_p_opt
+                if last_p_opts is not None:
+                    res['precip_dict'] = last_p_opts
 
             for key, chunks in dist_chunks.items():
                 if chunks:
