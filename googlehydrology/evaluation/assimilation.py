@@ -107,7 +107,7 @@ def _slice_hydrology_batch(d: dict, slice_start: int, slice_end: int) -> dict:
 
 
 class Assimilation(object):
-    """Fast 4D-Var state updating with inline diagnostic logging for MeanEmbeddingForecastLSTM."""
+    """Fast Data Assimilation state updating with inline diagnostic logging for MeanEmbeddingForecastLSTM."""
 
     def __init__(self, cfg: AssimilationConfig):
         self.cfg = cfg
@@ -243,7 +243,7 @@ class Assimilation(object):
 
 
         # =========================================================================
-        # PHASE 2: Sequential Window 4D-Var Optimization (a_start -> a_end)
+        # PHASE 2: Sequential Window Data Assimilation Optimization (a_start -> a_end)
         # =========================================================================
         curr_idx = a_start
         for w_idx in range(self.history):

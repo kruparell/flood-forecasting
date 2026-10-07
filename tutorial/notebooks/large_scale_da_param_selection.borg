@@ -1,0 +1,45 @@
+// Large Scale DA Parameter Selection Borg job configuration
+
+job large_scale_da_param_selection = {
+  // Cell where team has quota
+  runtime = { cell = 'oregon' }
+
+  // Target executable built via Blaze
+  package_binary = 'bin/large_scale_da_param_selection'
+  packages {
+    package bin = {
+      blaze_label = '//third_party/py/neuralhydrology/Karan:large_scale_da_param_selection'
+    }
+  }
+
+  // Explicit resource allocation (4 CPUs, 16GB RAM, Autopilot disabled)
+  requirements = {
+    cpu = 4.0
+    ram = 16384
+    autopilot = false
+  }
+
+  accounting = {
+    charged_user = 'flood-forecasting-dev'
+  }
+
+  scheduling {
+    priority = 115
+    batch_quota {
+      strategy = 'RUN_WITHIN'
+      start_deadline_secs = 600
+    }
+  }
+
+  // Command line arguments passed to Python script
+  args = {
+    caravan_base_dir = '/cns/jn-d/home/floods/hydro_model/work/kruparell/Caravans_V2'
+    multimet_dir = '/cns/jn-d/home/floods/hydro_model/datasets/external/Caravans_MultiMet'
+    pretrained_dir = '/cns/jn-d/home/floods/hydro_model/work/kruparell/pretrained-models/google-floodhub-settings-55-epochs-nse-filtered-0.5-85-epochs'
+    output_dir = '/cns/jn-d/home/floods/hydro_model/work/kruparell/large_scale_param_selection_results'
+    basin_list_path = '/cns/jn-d/home/floods/hydro_model/work/configs/CaravansV2_basin_valid_intervals.csv'
+    start_date = '2017-01-01'
+    end_date = '2017-01-15'
+    num_basins = '2'
+  }
+}

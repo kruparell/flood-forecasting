@@ -182,7 +182,17 @@ class BaseConfig(object):
         return cfg
 
     def _read_and_parse_config(self, yml_path: Path):
-        if yml_path.exists():
+        str_path = str(yml_path)
+        if str_path.startswith('/cns/'):
+            from googlehydrology.utils.gfile_utils import get_gfile
+            gfile = get_gfile()
+            if gfile and gfile.Exists(str_path):
+                with gfile.GFile(str_path, 'r') as fp:
+                    yaml = YAML(typ="safe")
+                    cfg = yaml.load(fp)
+            else:
+                raise FileNotFoundError(yml_path)
+        elif yml_path.exists():
             with yml_path.open('r') as fp:
                 yaml = YAML(typ="safe")
                 cfg = yaml.load(fp)

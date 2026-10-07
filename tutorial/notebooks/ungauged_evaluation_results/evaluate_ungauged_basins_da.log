@@ -1,0 +1,17 @@
+2026-08-03 12:57:27 [INFO] ======================================================================
+2026-08-03 12:57:27 [INFO]  Ungauged Basin Evaluation Pipeline (DA Mode) 
+2026-08-03 12:57:27 [INFO] ======================================================================
+2026-08-03 12:57:27 [INFO] Compute Device: cpu
+2026-08-03 12:57:27 [INFO] Parallel Worker Processes: 2
+2026-08-03 12:57:27 [INFO] Evaluation Date Range: 2017-01-01 to 2017-01-15
+2026-08-03 12:57:27 [INFO] Selected Config Spec: {'config_id': 'Config_1_LR0.01_Ep5_W7_Bg1e-08_c_keys', 'learning_rate': 0.01, 'epochs': 5, 'assimilation_window': 7, 'bg_regularization_weight': 1e-08, 'assimilation_targets': ['c_n_forecast'], 'distance_from_forecast': 1}
+2026-08-03 12:57:27 [INFO] Identified 0 used basins to exclude from ungauged sampling.
+2026-08-03 12:57:27 [INFO] Sampled 2 ungauged basins: [np.str_('GRDC_4133750'), np.str_('GRDC_4208025')] ...
+2026-08-03 12:57:28 [INFO] Evaluating across 15 issue dates: 2017-01-01 to 2017-01-15
+2026-08-03 12:57:28 [INFO] Starting parallel evaluation across 2 tasks using 2 workers...
+2026-08-03 12:57:49 [INFO] Successfully evaluated ungauged basin: GRDC_4133750
+2026-08-03 12:57:49 [INFO] Successfully evaluated ungauged basin: GRDC_4208025
+2026-08-03 12:57:49 [INFO] Saved gauge-level metrics to: /usr/local/google/home/kruparell/flood-forecasting/tutorial/notebooks/ungauged_evaluation_results/metrics_ungauged_basins.csv
+2026-08-03 12:57:49 [INFO] Saved timeseries predictions to: /usr/local/google/home/kruparell/flood-forecasting/tutorial/notebooks/ungauged_evaluation_results/timeseries_predictions_ungauged.csv
+2026-08-03 12:57:49 [INFO] Saved mean and median summary metrics by lead time to: /usr/local/google/home/kruparell/flood-forecasting/tutorial/notebooks/ungauged_evaluation_results/summary_ungauged_metrics_by_leadtime.csv
+2026-08-03 12:57:49 [INFO] Evaluation Pipeline Completed Successfully!

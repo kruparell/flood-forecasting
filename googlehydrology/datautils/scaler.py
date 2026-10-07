@@ -21,9 +21,8 @@ import dask.array
 import pandas as pd
 import xarray as xr
 
-from googlehydrology.utils.gfile_utils import get_gfile
-
-SCALER_FILE_NAME = 'scaler.nc'
+SCALER_FILE_NAME = 'scaler.zarr'
+LEGACY_SCALER_FILE_NAME = 'scaler.nc'
 
 
 def _calc_stats(dataset: xr.Dataset, needed: set[str]):
@@ -118,26 +117,21 @@ class Scaler:
                 self.calculate(dataset)
 
     def load(self):
-        scaler_file = self.scaler_dir / SCALER_FILE_NAME
-        str_file = str(scaler_file)
-        if str_file.startswith('/cns/'):
-            gfile = get_gfile()
-            if gfile and gfile.Exists(str_file):
-                with gfile.GFile(str_file, 'rb') as f:
-                    self.scaler = xr.load_dataset(f)
-                return
-        if os.path.exists(scaler_file):
-            with open(scaler_file, 'rb') as f:
+        scaler_zarr = self.scaler_dir / SCALER_FILE_NAME
+        scaler_nc = self.scaler_dir / LEGACY_SCALER_FILE_NAME
+        if scaler_zarr.is_dir():
+            self.scaler = xr.open_zarr(scaler_zarr).load()
+        elif scaler_nc.exists():
+            with open(scaler_nc, 'rb') as f:
                 self.scaler = xr.load_dataset(f)
-        else:
-            alt_scaler = self.scaler_dir / 'train_data_scaler.nc'
-            if os.path.exists(alt_scaler):
-                with open(alt_scaler, 'rb') as f:
+        elif scaler_zarr.exists():
+            try:
+                self.scaler = xr.open_zarr(scaler_zarr).load()
+            except Exception:
+                with open(scaler_zarr, 'rb') as f:
                     self.scaler = xr.load_dataset(f)
-                return
-            raise FileNotFoundError(
-                f'Scaler file not found at {scaler_file} (or {alt_scaler}).'
-            )
+        else:
+            raise ValueError(f'Scaler file not found in {self.scaler_dir}')
 
     def calculate(
         self,
@@ -194,24 +188,9 @@ class Scaler:
             )
         _assert_computed(self.scaler)
 
-        str_dir = str(self.scaler_dir)
+        os.makedirs(self.scaler_dir, exist_ok=True)
         scaler_file = self.scaler_dir / SCALER_FILE_NAME
-        str_file = str(scaler_file)
-
-        if str_file.startswith('/cns/'):
-            gfile = get_gfile()
-            if gfile:
-                if not gfile.Exists(str_dir):
-                    gfile.MakeDirs(str_dir)
-                tmp_local_path = f"/tmp/scaler_{os.getpid()}.nc"
-                self.scaler.to_netcdf(tmp_local_path, engine='h5netcdf')
-                gfile.Copy(tmp_local_path, str_file, overwrite=True)
-                if os.path.exists(tmp_local_path):
-                    os.remove(tmp_local_path)
-                return
-        else:
-            os.makedirs(self.scaler_dir, exist_ok=True)
-            self.scaler.to_netcdf(scaler_file, engine='netcdf4')
+        self.scaler.to_zarr(scaler_file, mode='w')
 
     def check_zero_scale(self):
         _assert_computed(self.scaler)

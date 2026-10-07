@@ -1,0 +1,20 @@
+// Stage 6 MultiMet Forecast Matrix Data Assimilation job configuration for Borg.
+
+job stage6_multimet_da = {
+  // Cell where team has quota
+  runtime = { cell = 'oregon' }
+
+  // Command running Python PAR binary built with Blaze
+  command = '/google/src/cloud/kruparell/analyze_google_hydrology_code/google3/blaze-bin/third_party/py/neuralhydrology/nh_run.par'
+
+  // Enable Borg Autopilot for automatic resource sizing (CPU & RAM)
+  requirements = { autopilot = true }
+
+  accounting = {
+    charged_user = 'flood-forecasting-dev'
+  }
+
+  scheduling {
+    priority = 25
+  }
+}

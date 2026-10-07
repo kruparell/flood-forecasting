@@ -79,11 +79,90 @@ union_mapping:
 
 # -- Input Features (Static) --
 static_attributes:
-  - area
-  - aridity_ERA5_LAND
-  - frac_snow
   - p_mean
   - pet_mean_ERA5_LAND
+  - aridity_ERA5_LAND
+  - frac_snow
+  - moisture_index_ERA5_LAND
+  - seasonality_ERA5_LAND
+  - high_prec_freq
+  - high_prec_dur
+  - low_prec_freq
+  - low_prec_dur
+  - aet_mm_syr
+  - ari_ix_sav
+  - crp_pc_sse
+  - ele_mt_sav
+  - ero_kh_sav
+  - for_pc_sse
+  - gdp_ud_ssu
+  - gla_pc_sse
+  - glc_pc_s01
+  - glc_pc_s02
+  - glc_pc_s03
+  - glc_pc_s04
+  - glc_pc_s06
+  - glc_pc_s07
+  - glc_pc_s08
+  - glc_pc_s09
+  - glc_pc_s10
+  - glc_pc_s11
+  - glc_pc_s12
+  - glc_pc_s13
+  - glc_pc_s14
+  - glc_pc_s15
+  - glc_pc_s16
+  - glc_pc_s17
+  - glc_pc_s18
+  - glc_pc_s19
+  - glc_pc_s20
+  - glc_pc_s21
+  - glc_pc_s22
+  - hft_ix_s09
+  - hft_ix_s93
+  - inu_pc_slt
+  - inu_pc_smn
+  - inu_pc_smx
+  - ire_pc_sse
+  - kar_pc_sse
+  - lka_pc_sse
+  - nli_ix_sav
+  - pac_pc_sse
+  - pet_mm_syr
+  - pnv_pc_s01
+  - pnv_pc_s02
+  - pnv_pc_s03
+  - pnv_pc_s04
+  - pnv_pc_s05
+  - pnv_pc_s06
+  - pnv_pc_s07
+  - pnv_pc_s08
+  - pnv_pc_s09
+  - pnv_pc_s10
+  - pnv_pc_s11
+  - pnv_pc_s12
+  - pnv_pc_s13
+  - pnv_pc_s14
+  - pnv_pc_s15
+  - ppd_pk_sav
+  - pre_mm_syr
+  - prm_pc_sse
+  - rdd_mk_sav
+  - snw_pc_syr
+  - swc_pc_syr
+  - tmp_dc_syr
+  - urb_pc_sse
+  - wet_pc_s01
+  - wet_pc_s02
+  - wet_pc_s03
+  - wet_pc_s04
+  - wet_pc_s05
+  - wet_pc_s06
+  - wet_pc_s07
+  - wet_pc_s08
+  - wet_pc_s09
+  - wet_pc_sg1
+  - wet_pc_sg2
 
 # -- Targets --
 target_variables:
@@ -100,14 +179,11 @@ timestep_counter: True
 # -- Dropout --
 output_dropout: 0.0
 
-# Mask 0% of AR observations at random (100% provided)
+# Mask 99% of AR observations during training (model receives ground truth 1% of the time)
 random_holdout_from_dynamic_features:
   streamflow_shift1:
-    missing_fraction: 0.0
-    mean_missing_length: 1
-  QObs(mm/d)_shift1:
-    missing_fraction: 0.0
-    mean_missing_length: 1
+    missing_fraction: 0.99
+    mean_missing_length: 10
 
 # -- Initialization --
 initial_forget_bias: 3

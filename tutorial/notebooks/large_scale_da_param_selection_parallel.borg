@@ -1,0 +1,29 @@
+// Large Scale DA Parameter Selection Borg job configuration (Parallel)
+
+job large_scale_da_param_selection_parallel = {
+  // Cell where team has quota
+  runtime = { cell = 'oregon' }
+
+  // Target executable built via Blaze
+  package_binary = 'bin/large_scale_da_param_selection_parallel'
+  packages {
+    package bin = {
+      blaze_label = '//third_party/py/neuralhydrology/Karan:large_scale_da_param_selection_parallel'
+    }
+  }
+
+  // Explicit resource allocation (4 CPUs, 16GB RAM, Autopilot disabled)
+  requirements = {
+    cpu = 4.0
+    ram = 16384
+    autopilot = false
+  }
+
+  accounting = {
+    charged_user = 'flood-forecasting-dev'
+  }
+
+  scheduling {
+    priority = 115
+  }
+}

@@ -1,0 +1,8 @@
+Lead Time (Days),Best Config ID,Mean DA NSE,Mean NSE Delta,Mean DA KGE,Mean KGE Delta
+1,Config_1_LR0.01_Ep5_W7_Bg1e-08_c_keys,-114.168,30.531,-3.215,0.554
+2,Config_1_LR0.01_Ep5_W7_Bg1e-08_c_keys,-101.237,27.777,-2.847,0.54
+3,Config_1_LR0.01_Ep5_W7_Bg1e-08_c_keys,-92.81,25.912,-2.626,0.522
+4,Config_1_LR0.01_Ep5_W7_Bg1e-08_c_keys,-90.602,23.478,-2.566,0.472
+5,Config_1_LR0.01_Ep5_W7_Bg1e-08_c_keys,-89.633,21.6,-2.534,0.431
+6,Config_1_LR0.01_Ep5_W7_Bg1e-08_c_keys,-89.933,20.075,-2.559,0.4
+7,Config_1_LR0.01_Ep5_W7_Bg1e-08_c_keys,-89.476,19.189,-2.515,0.374

@@ -1,0 +1,8 @@
+2026-08-03 11:35:29 [INFO] ======================================================================
+2026-08-03 11:35:29 [INFO]  Ungauged Basin Evaluation Pipeline (ARLSTM Mode) 
+2026-08-03 11:35:29 [INFO] ======================================================================
+2026-08-03 11:35:29 [INFO] Compute Device: cpu
+2026-08-03 11:35:29 [INFO] Parallel Worker Processes: 2
+2026-08-03 11:35:29 [INFO] Evaluation Date Range: 2017-01-01 to 2017-01-15
+2026-08-03 11:35:29 [INFO] Selected Config Spec: {'config_id': 'Config_1_LR0.01_Ep5_W7_Bg1e-08_c_keys', 'learning_rate': 0.01, 'epochs': 5, 'assimilation_window': 7, 'bg_regularization_weight': 1e-08, 'assimilation_targets': ['c_n_forecast'], 'distance_from_forecast': 1}
+2026-08-03 11:35:29 [INFO] Identified 8 used basins to exclude from ungauged sampling.
