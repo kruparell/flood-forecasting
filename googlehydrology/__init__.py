@@ -11,4 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+try:
+  import torch
+  # Disable TorchDynamo / torch.compile to avoid Borglet C++/Inductor sandbox failures
+  if hasattr(torch, "_dynamo"):
+    torch._dynamo.config.disable = True
+except (ImportError, AttributeError, ModuleNotFoundError):
+  pass

@@ -25,29 +25,26 @@ def start_evaluation(
     period: str = 'test',
     data_assimilation: bool = False,
 ):
-    """Start evaluation of a trained network
+  """Start evaluation of a trained network
 
-    Parameters
-    ----------
-    cfg : Config
-        The run configuration, read from the run directory.
-    run_dir : Path
-        Path to the run directory.
-    epoch : int, optional
-        Define a specific epoch to evaluate. By default, the weights of the last epoch are used.
-    period : {'train', 'validation', 'test'}, optional
-        The period to evaluate, by default 'test'.
-    data_assimilation : bool, optional
-        If True, runs evaluation with data assimilation. Default is False.
-
-    """
-    tester = get_tester(
-        cfg=cfg, run_dir=run_dir, period=period, init_model=True
-    )
-    tester.evaluate(
-        epoch=epoch,
-        save_results=True,
-        metrics=cfg.metrics,
-        data_assimilation=data_assimilation,
-    )
-
+  Parameters
+  ----------
+  cfg : Config
+      The run configuration, read from the run directory.
+  run_dir : Path
+      Path to the run directory.
+  epoch : int, optional
+      Define a specific epoch to evaluate. By default, the weights of the last
+      epoch are used.
+  period : {'train', 'validation', 'test'}, optional
+      The period to evaluate, by default 'test'.
+  data_assimilation : bool, optional
+      If True, runs evaluation with data assimilation. Default is False.
+  """
+  tester = get_tester(cfg=cfg, run_dir=run_dir, period=period, init_model=True)
+  tester.evaluate(
+      epoch=epoch,
+      save_results=True,
+      metrics=cfg.metrics,
+      data_assimilation=data_assimilation,
+  )

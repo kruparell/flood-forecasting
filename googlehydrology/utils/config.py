@@ -12,21 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import enum
-import logging
-import random
-import re
 from collections import OrderedDict
 from datetime import datetime
+import enum
+import logging
 from pathlib import Path
+import random
+import re
 from typing import TypeVar
 
+from googlehydrology.utils.assimilationconfig import AssimilationConfig
+from googlehydrology.utils.gfile_utils import gfile_exists, gfile_makedirs, gfile_open
 import pandas as pd
 import pydantic
 import pydantic.dataclasses
 from ruamel.yaml import YAML
-
-from googlehydrology.utils.assimilationconfig import AssimilationConfig
 
 T = TypeVar('T')
 U = TypeVar('U')
@@ -43,10 +43,27 @@ class WeightInitOpt(str, enum.Enum):
 
 @enum.unique
 class TesterSamplesReduction(str, enum.Enum):
-    """Opts for sample reduction in tester."""
+    """Opts for sample reduction in tester.
+
+    MEAN and MEDIAN reduce ACROSS the whole `samples` axis. For the
+    `cmal_deterministic` head that axis is not a set of draws -- it is the
+    10-point summary `[mixture_mean, q0.1, q0.2, ..., q0.9]` produced by
+    `utils.cmal_deterministic.generate_predictions`. Averaging or taking a
+    median across those ten heterogeneous points yields a blended statistic
+    that is not a meaningful estimator of anything.
+
+    MIXTURE_MEAN instead SELECTS index 0, the exact closed-form mixture
+    expectation E[X] from `modelzoo.head.calc_cmal_mean`. This is the correct
+    readout when scoring MSE-based metrics such as NSE and RMSE, whose unique
+    minimizer is the conditional mean. It is only valid for the
+    `cmal_deterministic` head, where index 0 carries that meaning; the tester
+    enforces this.
+    """
 
     MEAN = 'mean'
     MEDIAN = 'median'
+    MIXTURE_MEAN = 'mixture_mean'
+    MIXTURE_MEDIAN = 'mixture_median'
 
 
 @pydantic.dataclasses.dataclass(frozen=True, kw_only=True)
@@ -64,7 +81,7 @@ class Cache:
 
 
 class Config(object):
-    """Read run configuration from the specified path or dictionary and parse it into a configuration object.
+  """Read run configuration from the specified path or dictionary and parse it into a configuration object.
 
     During parsing, config keys that contain 'dir', 'file', or 'path' will be converted to pathlib.Path instances.
     Configuration keys ending with '_date' will be parsed to pd.Timestamps. The expected format is DD/MM/YYYY.
@@ -85,88 +102,101 @@ class Config(object):
         the config file or dict contain unrecognized keys.
     """
 
-    # Lists of deprecated config keys and purely informational metadata keys, needed when checking for unrecognized
-    # config keys since these keys are not properties of the Config class.
-    _metadata_keys = ['package_version', 'commit_hash']
+  # Lists of deprecated config keys and purely informational metadata keys, needed when checking for unrecognized
+  # config keys since these keys are not properties of the Config class.
+  _metadata_keys = ['package_version', 'commit_hash']
 
-    def __init__(self, yml_path_or_dict: Path | dict, dev_mode: bool = False):
-        if isinstance(yml_path_or_dict, Path):
-            self._cfg = Config._read_and_parse_config(yml_path=yml_path_or_dict)
-        elif isinstance(yml_path_or_dict, dict):
-            self._cfg = Config._parse_config(yml_path_or_dict)
-        else:
-            raise ValueError(
-                f'Cannot create a config from input of type {type(yml_path_or_dict)}.'
-            )
+  def __init__(
+      self, yml_path_or_dict: Path | dict | str, dev_mode: bool = False
+  ):
+    if isinstance(yml_path_or_dict, (Path, str)) or hasattr(
+        yml_path_or_dict, '__fspath__'
+    ):
+      yml_path_or_dict = Path(str(yml_path_or_dict))
+      self._cfg = Config._read_and_parse_config(yml_path=yml_path_or_dict)
+    elif isinstance(yml_path_or_dict, dict):
+      self._cfg = Config._parse_config(yml_path_or_dict)
+    else:
+      raise ValueError(
+          f'Cannot create a config from input of type {type(yml_path_or_dict)}.'
+      )
 
-        if not (self._cfg.get('dev_mode', False) or dev_mode):
-            Config._check_cfg_keys(self._cfg)
+    if not (self._cfg.get('dev_mode', False) or dev_mode):
+      Config._check_cfg_keys(self._cfg)
 
-        # check if assimilation specifications are part of the config, if yes, create AssimilationConfig instance once
-        if ("assimilation_config" in self._cfg.keys()) and (self._cfg["assimilation_config"] is not None):
-            da_cfg = self._cfg["assimilation_config"].copy() if isinstance(self._cfg["assimilation_config"], dict) else self._cfg["assimilation_config"]
-            if isinstance(da_cfg, dict):
-                if "predict_last_n" not in da_cfg and "predict_last_n" in self._cfg:
-                    p_n = self.predict_last_n
-                    p_val = list(p_n.values())[0] if isinstance(p_n, dict) else p_n
-                    da_cfg["predict_last_n"] = int(p_val)
-                if "seq_length" not in da_cfg and "seq_length" in self._cfg:
-                    s_n = self.seq_length
-                    s_val = list(s_n.values())[0] if isinstance(s_n, dict) else s_n
-                    da_cfg["seq_length"] = int(s_val)
-                if "target_variables" not in da_cfg and "target_variables" in self._cfg:
-                    da_cfg["target_variables"] = self._cfg["target_variables"]
-                self._assimilation_config = AssimilationConfig(da_cfg)
-            elif isinstance(da_cfg, AssimilationConfig):
-                self._assimilation_config = da_cfg
-            else:
-                self._assimilation_config = None
-        else:
-            self._assimilation_config = None
+    # check if assimilation specifications are part of the config, if yes, create AssimilationConfig instance once
+    if ('assimilation_config' in self._cfg.keys()) and (
+        self._cfg['assimilation_config'] is not None
+    ):
+      da_cfg = self._cfg['assimilation_config']
+      if 'predict_last_n' not in da_cfg:
+        da_cfg['predict_last_n'] = self.predict_last_n
+      for key in ['seq_length', 'target_variables']:
+        if key not in da_cfg and key in self._cfg:
+          da_cfg[key] = self._cfg[key]
+      self._assimilation_config = AssimilationConfig(da_cfg)
+    elif self._cfg.get('assimilate', False):
+      # Canonical default assimilation config
+      default_da_cfg = {
+          'assimilation_targets': ['static_embedding', 'hindcast_embedding'],
+          'assimilation_window': 180,
+          'learning_rate': 0.1,
+          'regularization_weight': 0.01,
+          'static_embedding_regularization_weight': 1e-6,
+          'hindcast_embedding_regularization_weight': 0.01,
+          'history': 1,
+          'epochs': 100,
+          'loss': 'MSE',
+          'optimizer': 'Adam',
+          'assimilation_lead_time': 0,
+          'predict_last_n': self.predict_last_n,
+          'seq_length': self.seq_length,
+          'target_variables': self.target_variables,
+      }
+      self._assimilation_config = AssimilationConfig(default_da_cfg)
+    else:
+      self._assimilation_config = None
 
-        # Adjust experiment name
-        if 'experiment_name' in self._cfg and self._cfg['experiment_name']:
-            # 1. Replace curly-bracketed entries
-            new_name = self._cfg['experiment_name']
-            for key, val in self._cfg.items():
-                if key.endswith('_date'):
-                    if isinstance(val, list):
-                        date_string = '_'.join(
-                            elem.strftime('%Y-%m-%d') for elem in val
-                        )
-                    else:
-                        date_string = val.strftime('%Y-%m-%d')
-                    new_name = re.sub(f'{{{key}}}', date_string, new_name)
-            new_name = re.sub('{random_name}', create_random_name(), new_name)
-            try:
-                new_name = new_name.format(**self._cfg)
-            except KeyError as ex:
-                raise KeyError(
+    # Adjust experiment name
+    if 'experiment_name' in self._cfg and self._cfg['experiment_name']:
+      # 1. Replace curly-bracketed entries
+      new_name = self._cfg['experiment_name']
+      for key, val in self._cfg.items():
+        if key.endswith('_date'):
+          if isinstance(val, list):
+            date_string = '_'.join(elem.strftime('%Y-%m-%d') for elem in val)
+          else:
+            date_string = val.strftime('%Y-%m-%d')
+          new_name = re.sub(f'{{{key}}}', date_string, new_name)
+      new_name = re.sub('{random_name}', create_random_name(), new_name)
+      try:
+        new_name = new_name.format(**self._cfg)
+      except KeyError as ex:
+        raise KeyError(
                     f'Experiment name is {self._cfg["experiment_name"]} '
                     + f'but {{{ex}}} was not found in config.'
                 ) from ex
-            # 2. Remove curly brackets and make sure experiment name can be used as folder in Linux and Windows
-            new_name = re.sub('{', '(', new_name)
-            new_name = re.sub('}', ')', new_name)
-            new_name = re.sub('"', "'", new_name)
-            new_name = re.sub('[<>:"/\\\\|?*]', '_', new_name)
-            new_name = re.sub(' ', '', new_name)
+      # 2. Remove curly brackets and make sure experiment name can be used as folder in Linux and Windows
+      new_name = re.sub('{', '(', new_name)
+      new_name = re.sub('}', ')', new_name)
+      new_name = re.sub('"', "'", new_name)
+      new_name = re.sub('[<>:"/\\\\|?*]', '_', new_name)
+      new_name = re.sub(' ', '', new_name)
 
-            self._cfg['experiment_name'] = new_name
-            
+      self._cfg['experiment_name'] = new_name
 
-    def as_dict(self) -> dict:
-        """Return run configuration as dictionary.
+  def as_dict(self) -> dict:
+    """Return run configuration as dictionary.
 
         Returns
         -------
         dict
             The run configuration, as defined in the .yml file.
         """
-        return self._cfg
+    return self._cfg
 
-    def dump_config(self, folder: Path, filename: str = 'config.yml'):
-        """Save the run configuration as a .yml file to disk.
+  def dump_config(self, folder: Path, filename: str = 'config.yml'):
+    """Save the run configuration as a .yml file to disk.
 
         Parameters
         ----------
@@ -174,54 +204,45 @@ class Config(object):
             Folder in which the configuration will be stored.
         filename : str, optional
             Name of the file that will be stored. Default: 'config.yml'.
-
-        Raises
-        ------
-        FileExistsError
-            If the specified folder already contains a file named `filename`.
         """
-        yml_path = folder / filename
-        yml_path = yml_path.expanduser()
-        if not yml_path.exists():
-            with yml_path.open('w') as fp:
-                temp_cfg = {}
-                for key, val in self._cfg.items():
-                    if any(
-                        [
-                            key.endswith(x)
-                            for x in ['_dir', '_path', '_file', '_files']
-                        ]
-                    ):
-                        if isinstance(val, list):
-                            temp_list = []
-                            for elem in val:
-                                temp_list.append(str(elem))
-                            temp_cfg[key] = temp_list
-                        else:
-                            temp_cfg[key] = str(val)
-                    elif key.endswith('_date'):
-                        if isinstance(val, list):
-                            temp_list = []
-                            for elem in val:
-                                temp_list.append(
-                                    elem.strftime(format='%d/%m/%Y')
-                                )
-                            temp_cfg[key] = temp_list
-                        else:
-                            assert isinstance(val, pd.Timestamp)
-                            temp_cfg[key] = val.strftime(format='%d/%m/%Y')
-                    else:
-                        temp_cfg[key] = val
+    yml_path = folder / filename
+    yml_path = yml_path.expanduser()
+    gfile_makedirs(folder, exist_ok=True)
+    if not gfile_exists(yml_path):
+      import io
 
-                yaml = YAML()
-                yaml.dump(dict(OrderedDict(sorted(temp_cfg.items()))), fp)
+      buf = io.StringIO()
+      temp_cfg = {}
+      for key, val in self._cfg.items():
+        if any([key.endswith(x) for x in ['_dir', '_path', '_file', '_files']]):
+          if isinstance(val, list):
+            temp_list = []
+            for elem in val:
+              temp_list.append(str(elem))
+            temp_cfg[key] = temp_list
+          else:
+            temp_cfg[key] = str(val)
+        elif key.endswith('_date'):
+          if isinstance(val, list):
+            temp_list = []
+            for elem in val:
+              temp_list.append(elem.strftime(format='%d/%m/%Y'))
+            temp_cfg[key] = temp_list
+          else:
+            assert isinstance(val, pd.Timestamp)
+            temp_cfg[key] = val.strftime(format='%d/%m/%Y')
         else:
-            raise FileExistsError(yml_path)
+          temp_cfg[key] = val
 
-    def update_config(
-        self, yml_path_or_dict: Path | dict, dev_mode: bool = False
-    ):
-        """Update config arguments.
+      yaml = YAML()
+      yaml.dump(dict(OrderedDict(sorted(temp_cfg.items()))), buf)
+      with gfile_open(yml_path, 'w') as fp:
+        fp.write(buf.getvalue())
+
+  def update_config(
+      self, yml_path_or_dict: Path | dict, dev_mode: bool = False
+  ):
+    """Update config arguments.
 
         Useful e.g. in the context of fine-tuning or when continuing to train from a checkpoint to adapt for example the
         learning rate, train basin files or anything else.
@@ -242,701 +263,674 @@ class Config(object):
             If the passed configuration specification is neither a Path nor a dict, or if `dev_mode` is off (default)
             and the config file or dict contain unrecognized keys.
         """
-        new_config = Config(yml_path_or_dict, dev_mode=dev_mode)
+    new_config = Config(yml_path_or_dict, dev_mode=dev_mode)
 
-        self._cfg.update(new_config.as_dict())
+    self._cfg.update(new_config.as_dict())
 
-        # check if assimilation specifications are part of the config, if yes, create AssimilationConfig instance once
-        if ("assimilation_config" in self._cfg.keys()) and (self._cfg["assimilation_config"] is not None):
-            da_cfg = self._cfg["assimilation_config"].copy() if isinstance(self._cfg["assimilation_config"], dict) else self._cfg["assimilation_config"]
-            if isinstance(da_cfg, dict):
-                if "predict_last_n" not in da_cfg and "predict_last_n" in self._cfg:
-                    p_n = self.predict_last_n
-                    p_val = list(p_n.values())[0] if isinstance(p_n, dict) else p_n
-                    da_cfg["predict_last_n"] = int(p_val)
-                if "seq_length" not in da_cfg and "seq_length" in self._cfg:
-                    s_n = self.seq_length
-                    s_val = list(s_n.values())[0] if isinstance(s_n, dict) else s_n
-                    da_cfg["seq_length"] = int(s_val)
-                if "target_variables" not in da_cfg and "target_variables" in self._cfg:
-                    da_cfg["target_variables"] = self._cfg["target_variables"]
-                self._assimilation_config = AssimilationConfig(da_cfg)
-            elif isinstance(da_cfg, AssimilationConfig):
-                self._assimilation_config = da_cfg
-            else:
-                self._assimilation_config = None
-        else:
-            self._assimilation_config = None
+    if ('assimilation_config' in self._cfg.keys()) and (
+        self._cfg['assimilation_config'] is not None
+    ):
+      da_cfg = self._cfg['assimilation_config']
+      for key in ['seq_length', 'predict_last_n', 'target_variables']:
+        if key not in da_cfg and key in self._cfg:
+          da_cfg[key] = self._cfg[key]
+      self._assimilation_config = AssimilationConfig(da_cfg)
+    else:
+      self._assimilation_config = None
 
-    def _get_value_verbose(
-        self, key: str
-    ) -> float | int | str | list | dict | Path | pd.Timestamp:
-        """Use this function internally to return attributes of the config that are mandatory"""
-        if key not in self._cfg.keys():
-            raise ValueError(f'{key} is not specified in the config (.yml).')
-        elif self._cfg[key] is None:
-            raise ValueError(f"{key} is mandatory but 'None' in the config.")
-        else:
-            return self._cfg[key]
+  def _get_value_verbose(
+      self, key: str
+  ) -> float | int | str | list | dict | Path | pd.Timestamp:
+    """Use this function internally to return attributes of the config that are mandatory"""
+    if key not in self._cfg.keys():
+      raise ValueError(f'{key} is not specified in the config (.yml).')
+    elif self._cfg[key] is None:
+      raise ValueError(f"{key} is mandatory but 'None' in the config.")
+    else:
+      return self._cfg[key]
 
-    @staticmethod
-    def _as_default_list(value: T | list[T] | None) -> list[T]:
-        if value is None:
-            return []
-        if isinstance(value, list):
-            return value
-        return [value]
+  @staticmethod
+  def _as_default_list(value: T | list[T] | None) -> list[T]:
+    if value is None:
+      return []
+    if isinstance(value, list):
+      return value
+    return [value]
 
-    @staticmethod
-    def _as_default_dict(value: T | dict[U, T] | None) -> dict[U, T]:
-        if value is None:
-            return {}
-        if isinstance(value, dict):
-            return value
-        raise RuntimeError(
+  @staticmethod
+  def _as_default_dict(value: T | dict[U, T] | None) -> dict[U, T]:
+    if value is None:
+      return {}
+    if isinstance(value, dict):
+      return value
+    raise RuntimeError(
             f'Incompatible type {type(value)}. Expected `dict` or `None`.'
         )
 
-    @staticmethod
-    def _check_cfg_keys(cfg: dict):
-        """Checks the config for unknown keys."""
-        property_names = [
+  @staticmethod
+  def _check_cfg_keys(cfg: dict):
+    """Checks the config for unknown keys."""
+    property_names = [
             p for p in dir(Config) if isinstance(getattr(Config, p), property)
         ]
 
-        unknown_keys = [
+    unknown_keys = [
             k
             for k in cfg.keys()
             if k not in property_names
             and k not in Config._metadata_keys
         ]
-        if unknown_keys:
-            raise ValueError(f'{unknown_keys} are not recognized config keys.')
+    if unknown_keys:
+      raise ValueError(f'{unknown_keys} are not recognized config keys.')
 
-    @staticmethod
-    def _parse_config(cfg: dict) -> dict:
-        for key, val in cfg.items():
-            # convert all path strings to PosixPath objects
-            if any(
+  @staticmethod
+  def _parse_config(cfg: dict) -> dict:
+    for key, val in cfg.items():
+      # convert all path strings to PosixPath objects
+      if any(
                 [key.endswith(x) for x in ['_dir', '_path', '_file', '_files']]
             ):
-                if (val is not None) and (val != 'None'):
-                    if isinstance(val, list):
-                        temp_list = []
-                        for element in val:
-                            temp_list.append(Path(element).expanduser())
-                        cfg[key] = temp_list
-                    else:
-                        cfg[key] = Path(val).expanduser()
-                else:
-                    cfg[key] = None
+        if (val is not None) and (val != 'None'):
+          if isinstance(val, list):
+            temp_list = []
+            for element in val:
+              temp_list.append(Path(element).expanduser())
+            cfg[key] = temp_list
+          else:
+            cfg[key] = Path(val).expanduser()
+        else:
+          cfg[key] = None
 
-            # convert Dates to pandas Datetime indexs
-            elif key.endswith('_date'):
-                if isinstance(val, list):
-                    temp_list = []
-                    for elem in val:
-                        temp_list.append(
+      # convert Dates to pandas Datetime indexs
+      elif key.endswith('_date'):
+        if isinstance(val, list):
+          temp_list = []
+          for elem in val:
+            temp_list.append(
                             pd.to_datetime(elem, format='%d/%m/%Y')
                         )
-                    cfg[key] = temp_list
-                else:
-                    cfg[key] = pd.to_datetime(val, format='%d/%m/%Y')
-
-            else:
-                pass
-
-        # Allow separate data directories to be defined for different types of data.
-        if 'data_dir' in cfg and 'statics_data_dir' not in cfg:
-            cfg['statics_data_dir'] = cfg['data_dir']
-        if 'data_dir' in cfg and 'dynamics_data_dir' not in cfg:
-            cfg['dynamics_data_dir'] = cfg['data_dir']
-        if 'data_dir' in cfg and 'targets_data_dir' not in cfg:
-            cfg['targets_data_dir'] = cfg['data_dir']
-
-        # Add more config parsing if necessary
-        return cfg
-
-    @staticmethod
-    def _read_and_parse_config(yml_path: Path):
-        if yml_path.exists():
-            with yml_path.open('r') as fp:
-                yaml = YAML(typ='safe')
-                cfg = yaml.load(fp)
+          cfg[key] = temp_list
         else:
-            raise FileNotFoundError(yml_path)
-        cfg = Config._parse_config(cfg)
+          cfg[key] = pd.to_datetime(val, format='%d/%m/%Y')
 
-        return cfg
+      else:
+        pass
 
-    @property
-    def detect_anomaly(self) -> bool:
-        return self._cfg.get('detect_anomaly', False)
+    # Allow separate data directories to be defined for different types of data.
+    if 'data_dir' in cfg and 'statics_data_dir' not in cfg:
+      cfg['statics_data_dir'] = cfg['data_dir']
+    if 'data_dir' in cfg and 'dynamics_data_dir' not in cfg:
+      cfg['dynamics_data_dir'] = cfg['data_dir']
+    if 'data_dir' in cfg and 'targets_data_dir' not in cfg:
+      cfg['targets_data_dir'] = cfg['data_dir']
 
-    @property
-    def cache(self) -> Cache:
-        data = self._cfg.get('cache', {})
-        return pydantic.TypeAdapter(Cache).validate_python(data)
+    # Add more config parsing if necessary
+    return cfg
 
-    @property
-    def lazy_load(self) -> bool:
-        return self._cfg.get('lazy_load', False)
+  @staticmethod
+  def _read_and_parse_config(yml_path: Path):
+    path_str = str(yml_path)
+    if gfile_exists(path_str):
+      with gfile_open(path_str, 'r') as fp:
+        yaml = YAML(typ='safe')
+        cfg = yaml.load(fp)
+    else:
+      raise FileNotFoundError(yml_path)
+    cfg = Config._parse_config(cfg)
 
-    @lazy_load.setter
-    def lazy_load(self, value: bool):
-        self._cfg['lazy_load'] = value
+    return cfg
 
-    @property
-    def print_warnings_once(self) -> bool:
-        return self._cfg.get('print_warnings_once', False)
+  @property
+  def detect_anomaly(self) -> bool:
+    return self._cfg.get('detect_anomaly', False)
 
-    @property
-    def tester_skip_obs_all_nan(self) -> bool:
-        return self._cfg.get('tester_skip_obs_all_nan', False)
+  @property
+  def cache(self) -> Cache:
+    data = self._cfg.get('cache', {})
+    return pydantic.TypeAdapter(Cache).validate_python(data)
 
-    @tester_skip_obs_all_nan.setter
-    def tester_skip_obs_all_nan(self, value: bool):
-        self._cfg['tester_skip_obs_all_nan'] = value
+  @property
+  def lazy_load(self) -> bool:
+    return self._cfg.get('lazy_load', False)
 
-    @property
-    def inference_mode(self) -> bool:
-        return self._cfg.get('inference_mode', True)
+  @lazy_load.setter
+  def lazy_load(self, value: bool):
+    self._cfg['lazy_load'] = value
 
-    @inference_mode.setter
-    def inference_mode(self, value: bool):
-        self._cfg['inference_mode'] = value
+  @property
+  def print_warnings_once(self) -> bool:
+    return self._cfg.get('print_warnings_once', False)
 
-    @property
-    def logging_level(self) -> int:
-        level = self._cfg.get('logging_level', 'INFO').upper()
-        match level:
-            case 'DEBUG':
-                return logging.DEBUG
-            case 'INFO':
-                return logging.INFO
-            case 'WARN':
-                return logging.WARN
-            case 'WARNING':
-                return logging.WARNING
-            case 'ERROR':
-                return logging.ERROR
-            case 'CRITICAL':
-                return logging.CRITICAL
-            case _:
-                raise ValueError(f'Invalid logging_level: {level}')
+  @property
+  def tester_skip_obs_all_nan(self) -> bool:
+    return self._cfg.get('tester_skip_obs_all_nan', False)
 
-    @property
-    def allow_subsequent_nan_losses(self) -> int:
-        return self._cfg.get('allow_subsequent_nan_losses', 0)
+  @tester_skip_obs_all_nan.setter
+  def tester_skip_obs_all_nan(self, value: bool):
+    self._cfg['tester_skip_obs_all_nan'] = value
 
-    @property
-    def base_run_dir(self) -> Path:
-        return self._get_value_verbose('base_run_dir')
+  @property
+  def inference_mode(self) -> bool:
+    return self._cfg.get('inference_mode', True)
 
-    @base_run_dir.setter
-    def base_run_dir(self, folder: Path):
-        self._cfg['base_run_dir'] = folder
+  @inference_mode.setter
+  def inference_mode(self, value: bool):
+    self._cfg['inference_mode'] = value
 
-    @property
-    def batch_size(self) -> int:
-        return self._get_value_verbose('batch_size')
+  @property
+  def logging_level(self) -> int:
+    level = self._cfg.get('logging_level', 'INFO').upper()
+    match level:
+      case 'DEBUG':
+        return logging.DEBUG
+      case 'INFO':
+        return logging.INFO
+      case 'WARN':
+        return logging.WARN
+      case 'WARNING':
+        return logging.WARNING
+      case 'ERROR':
+        return logging.ERROR
+      case 'CRITICAL':
+        return logging.CRITICAL
+      case _:
+        raise ValueError(f'Invalid logging_level: {level}')
 
-    @property
-    def checkpoint_path(self) -> Path:
-        return self._cfg.get('checkpoint_path', None)
+  @property
+  def allow_subsequent_nan_losses(self) -> int:
+    return self._cfg.get('allow_subsequent_nan_losses', 0)
 
-    @property
-    def clip_gradient_norm(self) -> float:
-        return self._cfg.get('clip_gradient_norm', None)
+  @property
+  def base_run_dir(self) -> Path:
+    return self._get_value_verbose('base_run_dir')
 
-    @property
-    def clip_targets_to_zero(self) -> list[str]:
-        return self._as_default_list(self._cfg.get('clip_targets_to_zero', []))
+  @base_run_dir.setter
+  def base_run_dir(self, folder: Path):
+    self._cfg['base_run_dir'] = folder
 
-    @property
-    def continue_from_epoch(self) -> int:
-        return self._cfg.get('continue_from_epoch', None)
+  @property
+  def batch_size(self) -> int:
+    return self._get_value_verbose('batch_size')
 
-    @property
-    def log_loss_every_nth_update(self) -> int:
-        return self._cfg.get('log_loss_every_nth_update', 1)
+  @property
+  def checkpoint_path(self) -> Path:
+    return self._cfg.get('checkpoint_path', None)
 
-    @property
-    def custom_normalization(self) -> dict:
-        return self._as_default_dict(self._cfg.get('custom_normalization', {}))
+  @property
+  def clip_gradient_norm(self) -> float:
+    return self._cfg.get('clip_gradient_norm', None)
 
-    @property
-    def data_dir(self) -> Path | None:
-        return self._cfg.get('data_dir', None)
+  @property
+  def clip_targets_to_zero(self) -> list[str]:
+    return self._as_default_list(self._cfg.get('clip_targets_to_zero', []))
 
-    @property
-    def dataset(self) -> str:
-        return self._get_value_verbose('dataset')
+  @property
+  def continue_from_epoch(self) -> int:
+    return self._cfg.get('continue_from_epoch', None)
 
-    @property
-    def device(self) -> str:
-        return self._cfg.get('device', None)
+  @property
+  def log_loss_every_nth_update(self) -> int:
+    return self._cfg.get('log_loss_every_nth_update', 1)
 
-    @device.setter
-    def device(self, device: str):
-        if device == 'cpu' or device.startswith('cuda:') or device == 'mps':
-            self._cfg['device'] = device
-        else:
-            raise ValueError(
+  @property
+  def custom_normalization(self) -> dict:
+    return self._as_default_dict(self._cfg.get('custom_normalization', {}))
+
+  @property
+  def data_dir(self) -> Path | None:
+    return self._cfg.get('data_dir', None)
+
+  @property
+  def dataset(self) -> str:
+    return self._get_value_verbose('dataset')
+
+  @property
+  def device(self) -> str:
+    return self._cfg.get('device', None)
+
+  @device.setter
+  def device(self, device: str):
+    if device == 'cpu' or device.startswith('cuda:') or device == 'mps':
+      self._cfg['device'] = device
+    else:
+      raise ValueError(
                 "'device' must be either 'cpu', 'mps', or 'cuda:X', with 'X' being the GPU ID."
             )
 
-    @property
-    def dynamics_embedding(self) -> EmbeddingSpec | None:
-        return self._get_embedding_spec(self._cfg.get('dynamics_embedding'))
+  @property
+  def dynamics_embedding(self) -> EmbeddingSpec | None:
+    return self._get_embedding_spec(self._cfg.get('dynamics_embedding'))
 
-    @property
-    def epochs(self) -> int:
-        return self._get_value_verbose('epochs')
+  @property
+  def epochs(self) -> int:
+    return self._get_value_verbose('epochs')
 
-    @property
-    def experiment_name(self) -> str:
-        if self._cfg.get('experiment_name', None) is None:
-            return 'run'
-        else:
-            return self._cfg['experiment_name']
+  @property
+  def experiment_name(self) -> str:
+    if self._cfg.get('experiment_name', None) is None:
+      return 'run'
+    else:
+      return self._cfg['experiment_name']
 
-    @property
-    def finetune_modules(self) -> list[str] | dict[str, str]:
-        finetune_modules = self._cfg.get('finetune_modules', [])
-        if finetune_modules is None:
-            return []
-        elif isinstance(finetune_modules, str):
-            return [finetune_modules]
-        elif isinstance(finetune_modules, dict) or isinstance(
+  @property
+  def finetune_modules(self) -> list[str] | dict[str, str]:
+    finetune_modules = self._cfg.get('finetune_modules', [])
+    if finetune_modules is None:
+      return []
+    elif isinstance(finetune_modules, str):
+      return [finetune_modules]
+    elif isinstance(finetune_modules, dict) or isinstance(
             finetune_modules, list
         ):
-            return finetune_modules
-        else:
-            raise ValueError(
+      return finetune_modules
+    else:
+      raise ValueError(
                 f"Unknown data type {type(finetune_modules)} for 'finetune_modules' argument."
             )
 
-    @property
-    def forecast_hidden_size(self) -> int:
-        return self._cfg.get('forecast_hidden_size', self.hidden_size)
+  @property
+  def forecast_hidden_size(self) -> int:
+    return self._cfg.get('forecast_hidden_size', self.hidden_size)
 
-    @property
-    def forecast_inputs(self) -> list[str]:
-        return self._get_value_verbose('forecast_inputs')
+  @property
+  def forecast_inputs(self) -> list[str]:
+    return self._get_value_verbose('forecast_inputs')
 
-    @property
-    def forecast_overlap(self) -> int:
-        return self._cfg.get('forecast_overlap', None)
+  @property
+  def forecast_overlap(self) -> int:
+    return self._cfg.get('forecast_overlap', None)
 
-    @property
-    def dynamics_data_dir(self) -> Path:
-        return self._get_value_verbose('dynamics_data_dir')
+  @property
+  def dynamics_data_dir(self) -> Path:
+    for key in ['dynamics_data_path', 'dynamics_data_dir', 'data_dir']:
+      if key in self._cfg and self._cfg[key]:
+        return self._cfg[key]
+    return self._get_value_verbose('dynamics_data_dir')
 
-    @property
-    def save_git_diff(self) -> bool:
-        return self._cfg.get('save_git_diff', False)
+  @property
+  def save_git_diff(self) -> bool:
+    return self._cfg.get('save_git_diff', False)
 
-    @property
-    def state_handoff_network(self) -> EmbeddingSpec | None:
-        return self._get_embedding_spec(self._cfg.get('state_handoff_network'))
+  @property
+  def state_handoff_network(self) -> EmbeddingSpec | None:
+    return self._get_embedding_spec(self._cfg.get('state_handoff_network'))
 
-    @property
-    def head(self) -> str:
-        return self._get_value_verbose('head')
+  @property
+  def head(self) -> str:
+    return self._get_value_verbose('head')
 
-    @property
-    def hindcast_inputs(self) -> list[str]:
-        return self._get_value_verbose('hindcast_inputs')
+  @property
+  def hindcast_inputs(self) -> list[str]:
+    return self._get_value_verbose('hindcast_inputs')
 
-    @property
-    def hidden_size(self) -> int | dict[str, int]:
-        return self._get_value_verbose('hidden_size')
+  @property
+  def hidden_size(self) -> int | dict[str, int]:
+    return self._get_value_verbose('hidden_size')
 
-    @property
-    def hindcast_hidden_size(self) -> int | dict[str, int]:
-        return self._cfg.get('hindcast_hidden_size', self.hidden_size)
+  @property
+  def hindcast_hidden_size(self) -> int | dict[str, int]:
+    return self._cfg.get('hindcast_hidden_size', self.hidden_size)
 
-    @property
-    def img_log_dir(self) -> Path:
-        return self._cfg.get('img_log_dir', None)
+  @property
+  def img_log_dir(self) -> Path:
+    return self._cfg.get('img_log_dir', None)
 
-    @img_log_dir.setter
-    def img_log_dir(self, folder: Path):
-        self._cfg['img_log_dir'] = folder
+  @img_log_dir.setter
+  def img_log_dir(self, folder: Path):
+    self._cfg['img_log_dir'] = folder
 
-    @property
-    def initial_forget_bias(self) -> float:
-        return self._cfg.get('initial_forget_bias', None)
+  @property
+  def initial_forget_bias(self) -> float:
+    return self._cfg.get('initial_forget_bias', None)
 
-    @property
-    def weight_init_opts(self) -> set[WeightInitOpt]:
-        res = set(self._as_default_list(self._cfg.get('weight_init_opts', [])))
-        bad_keys = res.difference(e.value for e in WeightInitOpt)
-        assert not bad_keys, f'unsupported weight_init_opts: {bad_keys}'
-        return res
+  @property
+  def weight_init_opts(self) -> set[WeightInitOpt]:
+    res = set(self._as_default_list(self._cfg.get('weight_init_opts', [])))
+    bad_keys = res.difference(e.value for e in WeightInitOpt)
+    assert not bad_keys, f'unsupported weight_init_opts: {bad_keys}'
+    return res
 
-    @property
-    def tester_sample_reduction(self) -> TesterSamplesReduction:
-        return self._cfg.get(
-            'tester_sample_reduction', TesterSamplesReduction.MEAN
-        )
+  @property
+  def tester_sample_reduction(self) -> TesterSamplesReduction:
+    return self._cfg.get('tester_sample_reduction', TesterSamplesReduction.MEAN)
 
-    @property
-    def is_continue_training(self) -> bool:
-        return self._cfg.get('is_continue_training', False)
+  @property
+  def is_continue_training(self) -> bool:
+    return self._cfg.get('is_continue_training', False)
 
-    @is_continue_training.setter
-    def is_continue_training(self, flag: bool):
-        self._cfg['is_continue_training'] = flag
+  @is_continue_training.setter
+  def is_continue_training(self, flag: bool):
+    self._cfg['is_continue_training'] = flag
 
-    @property
-    def is_finetuning(self) -> bool:
-        return self._cfg.get('is_finetuning', False)
+  @property
+  def is_finetuning(self) -> bool:
+    return self._cfg.get('is_finetuning', False)
 
-    @is_finetuning.setter
-    def is_finetuning(self, flag: bool):
-        self._cfg['is_finetuning'] = flag
+  @is_finetuning.setter
+  def is_finetuning(self, flag: bool):
+    self._cfg['is_finetuning'] = flag
 
-    @property
-    def compute_scaler(self) -> bool:
-        val = self._cfg.get('compute_scaler', None)
-        return (not self.is_finetuning) if val is None else bool(val)
+  @property
+  def compute_scaler(self) -> bool | None:
+    return self._cfg.get('compute_scaler', None)
 
-    @compute_scaler.setter
-    def compute_scaler(self, flag: bool):
-        self._cfg['compute_scaler'] = flag
+  @compute_scaler.setter
+  def compute_scaler(self, flag: bool):
+    self._cfg['compute_scaler'] = flag
 
-    @property
-    def lead_time(self) -> int:
-        return self._cfg.get('lead_time', 0)
+  @property
+  def lead_time(self) -> int:
+    return self._cfg.get('lead_time', 0)
 
-    @property
-    def learning_rate_strategy(self) -> str:
-        return self._cfg.get('learning_rate_strategy', 'ConstantLR')
+  @property
+  def learning_rate_strategy(self) -> str:
+    return self._cfg.get('learning_rate_strategy', 'ConstantLR')
 
-    @property
-    def initial_learning_rate(self) -> float:
-        return self._get_value_verbose('initial_learning_rate')
+  @property
+  def initial_learning_rate(self) -> float:
+    return self._get_value_verbose('initial_learning_rate')
 
-    @property
-    def learning_rate_drop_factor(self) -> float:
-        return self._cfg.get('learning_rate_drop_factor', 0.1)
+  @property
+  def learning_rate_drop_factor(self) -> float:
+    return self._cfg.get('learning_rate_drop_factor', 0.1)
 
-    @property
-    def learning_rate_epochs_drop(self) -> int:
-        return self._cfg.get('learning_rate_epochs_drop', 0)
+  @property
+  def learning_rate_epochs_drop(self) -> int:
+    return self._cfg.get('learning_rate_epochs_drop', 0)
 
-    @property
-    def load_as_csv(self) -> bool:
-        return self._cfg.get('load_as_csv', False)
-        
-    @property
-    def log_interval(self) -> int:
-        return self._cfg.get('log_interval', 10)
+  @property
+  def load_as_csv(self) -> bool:
+    return self._cfg.get('load_as_csv', False)
 
-    @property
-    def log_n_figures(self) -> int:
-        if (self._cfg.get('log_n_figures', None) is None) or (
-            self._cfg['log_n_figures'] < 1
-        ):
-            return 0
-        else:
-            return self._cfg['log_n_figures']
+  @property
+  def log_interval(self) -> int:
+    return self._cfg.get('log_interval', 10)
 
-    @property
-    def log_tensorboard(self) -> bool:
-        return self._cfg.get('log_tensorboard', True)
+  @property
+  def log_n_figures(self) -> int:
+    if (self._cfg.get('log_n_figures', None) is None) or (
+        self._cfg['log_n_figures'] < 1
+    ):
+      return 0
+    else:
+      return self._cfg['log_n_figures']
 
-    @property
-    def loss(self) -> str:
-        return self._get_value_verbose('loss')
+  @property
+  def log_tensorboard(self) -> bool:
+    return self._cfg.get('log_tensorboard', True)
 
-    @loss.setter
-    def loss(self, loss: str):
-        self._cfg['loss'] = loss
+  @property
+  def loss(self) -> str:
+    return self._get_value_verbose('loss')
 
-    @property
-    def max_updates_per_epoch(self) -> int:
-        return max(0, self._cfg.get('max_updates_per_epoch', 0) or 0)
+  @loss.setter
+  def loss(self, loss: str):
+    self._cfg['loss'] = loss
 
-    @property
-    def mc_dropout(self) -> bool:
-        return self._cfg.get('mc_dropout', False)
+  @property
+  def max_updates_per_epoch(self) -> int:
+    return max(0, self._cfg.get('max_updates_per_epoch', 0) or 0)
 
-    @property
-    def metrics(self) -> list[str] | dict[str, list[str]]:
-        return self._cfg.get('metrics', [])
+  @property
+  def mc_dropout(self) -> bool:
+    return self._cfg.get('mc_dropout', False)
 
-    @metrics.setter
-    def metrics(self, metrics: str | list[str, dict[str, list[str]]]):
-        self._cfg['metrics'] = metrics
+  @property
+  def metrics(self) -> list[str] | dict[str, list[str]]:
+    return self._cfg.get('metrics', [])
 
-    @property
-    def model(self) -> str:
-        return self._get_value_verbose('model')
+  @metrics.setter
+  def metrics(self, metrics: str | list[str, dict[str, list[str]]]):
+    self._cfg['metrics'] = metrics
 
-    @property
-    def n_distributions(self) -> int:
-        return self._get_value_verbose('n_distributions')
+  @property
+  def model(self) -> str:
+    return self._get_value_verbose('model')
 
-    @property
-    def n_samples(self) -> int:
-        return self._get_value_verbose('n_samples')
+  @property
+  def n_distributions(self) -> int:
+    return self._get_value_verbose('n_distributions')
 
-    @property
-    def nan_handling_method(self) -> str:
-        method = self._cfg.get('nan_handling_method', None)
-        if not method:
-            return None
-        return method
+  @property
+  def n_samples(self) -> int:
+    return self._get_value_verbose('n_samples')
 
-    @property
-    def nan_handling_pos_encoding_size(self) -> int:
-        return self._cfg.get('nan_handling_pos_encoding_size', 0)
+  @property
+  def nan_handling_method(self) -> str:
+    method = self._cfg.get('nan_handling_method', None)
+    if not method:
+      return None
+    return method
 
-    @property
-    def negative_sample_handling(self) -> str:
-        return self._cfg.get('negative_sample_handling', None)
+  @property
+  def nan_handling_pos_encoding_size(self) -> int:
+    return self._cfg.get('nan_handling_pos_encoding_size', 0)
 
-    @property
-    def negative_sample_max_retries(self) -> int:
-        return self._get_value_verbose('negative_sample_max_retries')
+  @property
+  def negative_sample_handling(self) -> str:
+    return self._cfg.get('negative_sample_handling', None)
 
-    @property
-    def no_loss_frequencies(self) -> list:
-        return self._as_default_list(self._cfg.get('no_loss_frequencies', []))
+  @property
+  def negative_sample_max_retries(self) -> int:
+    return self._get_value_verbose('negative_sample_max_retries')
 
-    @property
-    def num_workers(self) -> int:
-        return self._cfg.get('num_workers', 0)
+  @property
+  def no_loss_frequencies(self) -> list:
+    return self._as_default_list(self._cfg.get('no_loss_frequencies', []))
 
-    @property
-    def number_of_basins(self) -> int:
-        return self._get_value_verbose('number_of_basins')
+  @property
+  def num_workers(self) -> int:
+    return self._cfg.get('num_workers', 0)
 
-    @number_of_basins.setter
-    def number_of_basins(self, num_basins: int):
-        self._cfg['number_of_basins'] = num_basins
+  @property
+  def number_of_basins(self) -> int:
+    return self._get_value_verbose('number_of_basins')
 
-    @property
-    def optimizer(self) -> str:
-        return self._get_value_verbose('optimizer')
+  @number_of_basins.setter
+  def number_of_basins(self, num_basins: int):
+    self._cfg['number_of_basins'] = num_basins
 
-    @property
-    def output_activation(self) -> str:
-        return self._cfg.get('output_activation', 'linear')
+  @property
+  def optimizer(self) -> str:
+    return self._get_value_verbose('optimizer')
 
-    @property
-    def output_dropout(self) -> float:
-        return self._cfg.get('output_dropout', 0.0)
+  @property
+  def output_activation(self) -> str:
+    return self._cfg.get('output_activation', 'linear')
 
-    @property
-    def use_swap_memory(self) -> bool | None:
-        return self._cfg.get('use_swap_memory', None)
+  @property
+  def output_dropout(self) -> float:
+    return self._cfg.get('output_dropout', 0.0)
 
-    @property
-    def experimental_load_target_features_parallel_processes(self) -> int:
-        """Return num processes to load target features' netCDFs in parallel."""
-        value = self._cfg.get(
+  @property
+  def use_swap_memory(self) -> bool | None:
+    return self._cfg.get('use_swap_memory', None)
+
+  @property
+  def experimental_load_target_features_parallel_processes(self) -> int:
+    """Return num processes to load target features' netCDFs in parallel."""
+    value = self._cfg.get(
             'experimental_load_target_features_parallel_processes'
         )
-        return max(1, value or 1)
+    return max(1, value or 1)
 
-    @property
-    def predict_last_n(self) -> int | dict[str, int]:
-        return self._get_value_verbose('predict_last_n')
+  @property
+  def predict_last_n(self) -> int | dict[str, int]:
+    return self._get_value_verbose('predict_last_n')
 
-    @property
-    def regularization(self) -> list[str | tuple[str, float]]:
-        return self._as_default_list(self._cfg.get('regularization', []))
+  @property
+  def regularization(self) -> list[str | tuple[str, float]]:
+    return self._as_default_list(self._cfg.get('regularization', []))
 
-    @property
-    def run_dir(self) -> Path:
-        return self._cfg.get('run_dir', None)
+  @property
+  def run_dir(self) -> Path:
+    return self._cfg.get('run_dir', None)
 
-    @run_dir.setter
-    def run_dir(self, folder: Path):
-        self._cfg['run_dir'] = folder
+  @run_dir.setter
+  def run_dir(self, folder: Path):
+    self._cfg['run_dir'] = folder
 
-    @property
-    def save_validation_results(self) -> bool:
-        return self._cfg.get('save_validation_results', False)
+  @property
+  def save_validation_results(self) -> bool:
+    return self._cfg.get('save_validation_results', False)
 
-    @property
-    def save_weights_every(self) -> int:
-        return self._cfg.get('save_weights_every', 1)
+  @property
+  def save_weights_every(self) -> int:
+    return self._cfg.get('save_weights_every', 1)
 
-    @property
-    def seed(self) -> int:
-        return self._cfg.get('seed', None)
+  @property
+  def seed(self) -> int:
+    return self._cfg.get('seed', None)
 
-    @property
-    def statics_data_dir(self) -> Path:
-        return self._get_value_verbose('statics_data_dir')
+  @property
+  def statics_data_dir(self) -> Path:
+    for key in ['statics_data_path', 'statics_data_dir', 'data_dir']:
+      if key in self._cfg and self._cfg[key]:
+        return self._cfg[key]
+    return self._get_value_verbose('statics_data_dir')
 
-    @property
-    def targets_data_dir(self) -> Path:
-        return self._get_value_verbose('targets_data_dir')
+  @property
+  def targets_data_dir(self) -> Path:
+    for key in ['targets_data_path', 'targets_data_dir', 'data_dir']:
+      if key in self._cfg and self._cfg[key]:
+        return self._cfg[key]
+    return self._get_value_verbose('targets_data_dir')
 
-    @seed.setter
-    def seed(self, seed: int):
-        if self._cfg.get('seed', None) is None:
-            self._cfg['seed'] = seed
-        else:
-            raise RuntimeError(
-                "Seed was already specified and can't be replaced"
-            )
+  @seed.setter
+  def seed(self, seed: int):
+    if self._cfg.get('seed', None) is None:
+      self._cfg['seed'] = seed
+    else:
+      raise RuntimeError("Seed was already specified and can't be replaced")
 
-    @property
-    def seq_length(self) -> int | dict[str, int]:
-        return self._get_value_verbose('seq_length')
+  @property
+  def seq_length(self) -> int | dict[str, int]:
+    return self._get_value_verbose('seq_length')
 
-    @seq_length.setter
-    def seq_length(self, val: int | dict[str, int]) -> None:
-        self._cfg['seq_length'] = val
+  @property
+  def static_attributes(self) -> list[str]:
+    return self._as_default_list(self._cfg['static_attributes'])
 
-    @property
-    def static_attributes(self) -> list[str]:
-        return self._as_default_list(self._cfg['static_attributes'])
+  @property
+  def statics_embedding(self) -> EmbeddingSpec | None:
+    return self._get_embedding_spec(self._cfg.get('statics_embedding'))
 
-    @property
-    def statics_embedding(self) -> EmbeddingSpec | None:
-        return self._get_embedding_spec(self._cfg.get('statics_embedding'))
+  @property
+  def hindcast_embedding(self) -> EmbeddingSpec | None:
+    return self._get_embedding_spec(self._cfg.get('hindcast_embedding'))
 
-    @property
-    def hindcast_embedding(self) -> EmbeddingSpec | None:
-        return self._get_embedding_spec(self._cfg.get('hindcast_embedding'))
+  @property
+  def forecast_embedding(self) -> EmbeddingSpec | None:
+    return self._get_embedding_spec(self._cfg.get('forecast_embedding'))
 
-    @property
-    def forecast_embedding(self) -> EmbeddingSpec | None:
-        return self._get_embedding_spec(self._cfg.get('forecast_embedding'))
+  @property
+  def target_loss_weights(self) -> list[float]:
+    return self._cfg.get('target_loss_weights', None)
 
-    @property
-    def target_loss_weights(self) -> list[float]:
-        return self._cfg.get('target_loss_weights', None)
-
-    @property
-    def target_noise_std(self) -> float:
-        if (self._cfg.get('target_noise_std', None) is None) or (
+  @property
+  def target_noise_std(self) -> float:
+    if (self._cfg.get('target_noise_std', None) is None) or (
             self._cfg['target_noise_std'] == 0
         ):
-            return None
-        else:
-            return self._cfg['target_noise_std']
+      return None
+    else:
+      return self._cfg['target_noise_std']
 
-    @property
-    def target_variables(self) -> list[str]:
-        return self._cfg['target_variables']
+  @property
+  def target_variables(self) -> list[str]:
+    return self._cfg['target_variables']
 
-    @property
-    def union_mapping(self) -> dict[str, str] | None:
-        return self._cfg.get('union_mapping', None)
+  @property
+  def union_mapping(self) -> dict[str, str] | None:
+    return self._cfg.get('union_mapping', None)
 
-    @property
-    def test_basin_file(self) -> Path:
-        return self._get_value_verbose('test_basin_file')
+  @property
+  def test_basin_file(self) -> Path:
+    return self._get_value_verbose('test_basin_file')
 
-    @property
-    def test_end_date(self) -> list[pd.Timestamp]:
-        return self._as_default_list(self._get_value_verbose('test_end_date'))
+  @property
+  def test_end_date(self) -> list[pd.Timestamp]:
+    return self._as_default_list(self._get_value_verbose('test_end_date'))
 
-    @property
-    def test_start_date(self) -> list[pd.Timestamp]:
-        return self._as_default_list(self._get_value_verbose('test_start_date'))
+  @property
+  def test_start_date(self) -> list[pd.Timestamp]:
+    return self._as_default_list(self._get_value_verbose('test_start_date'))
 
-    @property
-    def timestep_counter(self) -> bool:
-        return self._cfg.get('timestep_counter', False)
+  @property
+  def timestep_counter(self) -> bool:
+    return self._cfg.get('timestep_counter', False)
 
-    @property
-    def train_basin_file(self) -> Path:
-        return self._get_value_verbose('train_basin_file')
+  @property
+  def train_basin_file(self) -> Path:
+    return self._get_value_verbose('train_basin_file')
 
-    @property
-    def train_dir(self) -> Path:
-        return self._cfg.get('train_dir', None)
+  @property
+  def train_dir(self) -> Path:
+    return self._cfg.get('train_dir', None)
 
-    @train_dir.setter
-    def train_dir(self, folder: Path):
-        self._cfg['train_dir'] = folder
+  @train_dir.setter
+  def train_dir(self, folder: Path):
+    self._cfg['train_dir'] = folder
 
-    @property
-    def hot_start_path(self) -> Path | None:
-        val = self._cfg.get('hot_start_path', None)
-        return Path(val).expanduser() if val else None
+  @property
+  def train_end_date(self) -> list[pd.Timestamp]:
+    return self._as_default_list(self._get_value_verbose('train_end_date'))
 
-    @hot_start_path.setter
-    def hot_start_path(self, path: str | Path | None) -> None:
-        self._cfg['hot_start_path'] = Path(path).expanduser() if path else None
-
-    @property
-    def save_state(self) -> bool:
-        return bool(self._cfg.get('save_state', False))
-
-    @save_state.setter
-    def save_state(self, val: bool) -> None:
-        self._cfg['save_state'] = bool(val)
-
-    @property
-    def train_end_date(self) -> list[pd.Timestamp]:
-        return self._as_default_list(self._get_value_verbose('train_end_date'))
-
-    @property
-    def train_start_date(self) -> list[pd.Timestamp]:
-        return self._as_default_list(
+  @property
+  def train_start_date(self) -> list[pd.Timestamp]:
+    return self._as_default_list(
             self._get_value_verbose('train_start_date')
         )
 
-    @property
-    def use_frequencies(self) -> list[str]:
-        return self._as_default_list(self._cfg.get('use_frequencies', []))
+  @property
+  def use_frequencies(self) -> list[str]:
+    return self._as_default_list(self._cfg.get('use_frequencies', []))
 
-    @property
-    def validate_every(self) -> int:
-        if (self._cfg.get('validate_every', None) is None) or (
+  @property
+  def validate_every(self) -> int:
+    if (self._cfg.get('validate_every', None) is None) or (
             self._cfg['validate_every'] < 1
         ):
-            return None
-        else:
-            return self._cfg['validate_every']
+      return None
+    else:
+      return self._cfg['validate_every']
 
-    @property
-    def allzero_samples_are_invalid(self) -> bool:
-        return self._cfg.get('allzero_samples_are_invalid', False)
+  @property
+  def allzero_samples_are_invalid(self) -> bool:
+    return self._cfg.get('allzero_samples_are_invalid', False)
 
-    @property
-    def validate_n_random_basins(self) -> int:
-        if (self._cfg.get('validate_n_random_basins', None) is None) or (
+  @property
+  def validate_n_random_basins(self) -> int:
+    if (self._cfg.get('validate_n_random_basins', None) is None) or (
             self._cfg['validate_n_random_basins'] < 1
         ):
-            return 0
-        else:
-            return self._cfg['validate_n_random_basins']
+      return 0
+    else:
+      return self._cfg['validate_n_random_basins']
 
-    @validate_n_random_basins.setter
-    def validate_n_random_basins(self, n_basins: int):
-        self._cfg['validate_n_random_basins'] = n_basins
+  @validate_n_random_basins.setter
+  def validate_n_random_basins(self, n_basins: int):
+    self._cfg['validate_n_random_basins'] = n_basins
 
-    @property
-    def validation_basin_file(self) -> Path:
-        return self._get_value_verbose('validation_basin_file')
+  @property
+  def validation_basin_file(self) -> Path:
+    return self._get_value_verbose('validation_basin_file')
 
-    @property
-    def validation_end_date(self) -> list[pd.Timestamp]:
-        return self._as_default_list(
+  @property
+  def validation_end_date(self) -> list[pd.Timestamp]:
+    return self._as_default_list(
             self._get_value_verbose('validation_end_date')
         )
 
-    @property
-    def validation_start_date(self) -> list[pd.Timestamp]:
-        return self._as_default_list(
+  @property
+  def validation_start_date(self) -> list[pd.Timestamp]:
+    return self._as_default_list(
             self._get_value_verbose('validation_start_date')
         )
 
-    @property
-    def verbose(self) -> int:
-        """Defines level of verbosity.
+  @property
+  def verbose(self) -> int:
+    """Defines level of verbosity.
 
         0: Only log info messages, don't show progress bars
         1: Log info messages and show progress bars
@@ -946,35 +940,89 @@ class Config(object):
         int
             Level of verbosity.
         """
-        return self._cfg.get('verbose', 1)
+    return self._cfg.get('verbose', 1)
 
-    @property
-    def compile(self) -> bool:
-        return self._cfg.get('compile', True)
+  @property
+  def compile(self) -> bool:
+    return self._cfg.get('compile', True)
 
-    @property
-    def assimilation_config(self) -> AssimilationConfig | None:
-        return getattr(self, '_assimilation_config', None)
-
-    def _get_embedding_spec(
+  def _get_embedding_spec(
         self, embedding_spec: dict | None
     ) -> EmbeddingSpec | None:
-        if embedding_spec is None:
-            return None
-        hiddens = self._as_default_list(embedding_spec.get('hiddens', []))
-        activation = embedding_spec.get('activation', 'tanh')
-        if isinstance(activation, list):
-            assert len(activation) == len(hiddens)
-        else:
-            activation = [activation] * len(hiddens)
-        return EmbeddingSpec(
+    if embedding_spec is None:
+      return None
+    hiddens = self._as_default_list(embedding_spec.get('hiddens', []))
+    activation = embedding_spec.get('activation', 'tanh')
+    if isinstance(activation, list):
+      assert len(activation) == len(hiddens)
+    else:
+      activation = [activation] * len(hiddens)
+    return EmbeddingSpec(
             type=embedding_spec.get('type', 'fc'),
             hiddens=hiddens,
             activation=activation,
             dropout=embedding_spec.get('dropout', 0.0),
         )
 
+  @property
+  def assimilate(self) -> bool:
+    return self._cfg.get('assimilate', False)
 
+  @assimilate.setter
+  def assimilate(self, flag: bool):
+    self._cfg['assimilate'] = bool(flag)
+    if flag and self._assimilation_config is None:
+      default_da_cfg = {
+          'assimilation_targets': ['static_embedding', 'hindcast_embedding'],
+          'assimilation_window': 180,
+          'learning_rate': 0.1,
+          'regularization_weight': 0.01,
+          'static_embedding_regularization_weight': 1e-6,
+          'hindcast_embedding_regularization_weight': 0.01,
+          'history': 1,
+          'epochs': 100,
+          'loss': 'MSE',
+          'optimizer': 'Adam',
+          'assimilation_lead_time': 0,
+          'predict_last_n': self.predict_last_n,
+          'seq_length': self.seq_length,
+          'target_variables': self.target_variables,
+      }
+      self._assimilation_config = AssimilationConfig(default_da_cfg)
+
+  @property
+  def assimilation_config(self) -> AssimilationConfig | None:
+    return getattr(self, '_assimilation_config', None)
+
+  @property
+  def dynamic_inputs(self) -> list[str] | dict[str, list[str]]:
+    return self._get_value_verbose('dynamic_inputs')
+
+  @property
+  def autoregressive_inputs(self) -> list[str] | dict[str, list[str]]:
+    return self._as_default_list(self._cfg.get('autoregressive_inputs', []))
+
+  @property
+  def hydroatlas_attributes(self) -> list[str]:
+    return self._as_default_list(self._cfg.get('hydroatlas_attributes', []))
+
+  @property
+  def evolving_attributes(self) -> list[str]:
+    return self._as_default_list(self._cfg.get('evolving_attributes', []))
+
+  @property
+  def use_basin_id_encoding(self) -> bool:
+    return self._cfg.get('use_basin_id_encoding', False)
+
+  @property
+  def predict_n_hindcast(self) -> int:
+    return self._cfg.get('predict_n_hindcast', 0)
+
+  @property
+  def random_holdout_from_dynamic_features(self) -> dict:
+    return self._as_default_dict(
+        self._cfg.get('random_holdout_from_dynamic_features', {})
+    )
 
 
 def create_random_name():

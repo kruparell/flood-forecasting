@@ -59,4 +59,29 @@ def _prefix(feature: str) -> str:
 
 
 def _unique(features: list[str]) -> list[str]:
-    return list(more_itertools.unique_everseen(features))
+  return list(more_itertools.unique_everseen(features))
+
+
+_YE_FREQ = 'YE'
+_ME_FREQ = 'ME'
+_QE_FREQ = 'QE'
+try:
+  from pandas.tseries.frequencies import to_offset
+
+  try:
+    to_offset(_YE_FREQ)
+  except ValueError:
+    _YE_FREQ = 'Y'
+    _ME_FREQ = 'M'
+    _QE_FREQ = 'Q'
+except ImportError:
+  pass
+
+
+def sort_frequencies(frequencies: list[str]) -> list[str]:
+  """Sort the passed frequencies from low to high frequencies."""
+  from pandas.tseries.frequencies import to_offset
+
+  offsets = [to_offset(freq) for freq in frequencies]
+  sorted_offsets = sorted(offsets, key=lambda offset: offset.nanos)
+  return [offset.freqstr for offset in sorted_offsets]

@@ -59,6 +59,29 @@ def metrics_to_dataframe(
                     # in case the current period has no valid samples, the result dict has no metric-key
                     metrics_dict[basin][metric_key] = np.nan
 
+                # Also capture all per-leadtime metrics and multi-lead summary if present
+                lead_prefix = f'{metric_key}_lead'
+                mean_prefix = f'{metric_key}_mean_lead'
+                lead_keys = sorted(
+                    [
+                        k
+                        for k in freq_results.keys()
+                        if k.startswith(lead_prefix) or k.startswith(mean_prefix)
+                    ],
+                    key=lambda x: (
+                        1 if '_mean_' in x else 0,
+                        (
+                            int(x.split('_lead')[-1].split('_')[0])
+                            if '_lead' in x
+                            and x.split('_lead')[-1].split('_')[0].isdigit()
+                            else 999
+                        ),
+                        x,
+                    ),
+                )
+                for lk in lead_keys:
+                  metrics_dict[basin][lk] = freq_results[lk]
+
     df = pd.DataFrame.from_dict(metrics_dict, orient='index')
     df.index.name = 'basin'
 

@@ -13,9 +13,9 @@
 # limitations under the License.
 
 import logging
+from pathlib import Path
 import subprocess
 import sys
-from pathlib import Path
 
 from tqdm.contrib.logging import logging_redirect_tqdm
 
@@ -41,7 +41,7 @@ class WarningOnceFilter(logging.Filter):
 
 
 def setup_logging(log_file: str, level: int, print_warnings_once: bool):
-    """Initialize logging to `log_file` and stdout.
+  """Initialize logging to `log_file` and stdout.
 
     Parameters
     ----------
@@ -52,108 +52,86 @@ def setup_logging(log_file: str, level: int, print_warnings_once: bool):
     print_warnings_once : bool
         Whether to filter warnings that same line type and msg.
     """
-    logging.captureWarnings(True)
-    if print_warnings_once:
-        logging.getLogger('py.warnings').addFilter(WarningOnceFilter())
+  logging.captureWarnings(True)
+  if print_warnings_once:
+    logging.getLogger('py.warnings').addFilter(WarningOnceFilter())
 
-    file_handler = logging.FileHandler(filename=log_file)
-    stdout_handler = logging.StreamHandler(sys.stdout)
+  handlers = [logging.StreamHandler(sys.stdout)]
+  if log_file and not str(log_file).startswith('/cns/'):
+    try:
+      import os
 
-    logging.basicConfig(
-        handlers=[file_handler, stdout_handler],
-        level=level,
-        style='{',
-        datefmt='%H:%M:%S',
-        format='[{levelname}] {asctime}.{msecs:0<3.0f} ({filename}:{funcName}) -- {message}',
-    )
+      parent = os.path.dirname(str(log_file))
+      if parent:
+        os.makedirs(parent, exist_ok=True)
+      handlers.append(logging.FileHandler(filename=log_file))
+    except Exception:
+      pass
 
-    # Make sure we log uncaught exceptions
-    def exception_logging(type, value, tb):
-        LOGGER.exception(f'Uncaught exception', exc_info=(type, value, tb))
+  logging.basicConfig(
+      handlers=handlers,
+      level=level,
+      style='{',
+      datefmt='%H:%M:%S',
+      format=(
+          '[{levelname}] {asctime}.{msecs:0<3.0f} ({filename}:{funcName}) --'
+          ' {message}'
+      ),
+      force=True,
+  )
 
-    sys.excepthook = exception_logging
+  # Make sure we log uncaught exceptions
+  def exception_logging(type, value, tb):
+    LOGGER.exception(f'Uncaught exception', exc_info=(type, value, tb))
 
-    LOGGER.info(f'Logging to {log_file} initialized.')
+  sys.excepthook = exception_logging
 
-    # Suppress DEBUG-level logging from these modules:
-    logging.getLogger('filelock').setLevel(logging.INFO)
-    logging.getLogger('matplotlib.font_manager').setLevel(logging.INFO)
-    logging.getLogger('fsspec').setLevel(logging.INFO)
-    logging.getLogger('zarr').setLevel(logging.INFO)
+  LOGGER.info(f'Logging to {log_file} initialized.')
 
-    logging_redirect_tqdm().__enter__()
+  # Suppress DEBUG-level logging from these modules:
+  logging.getLogger('filelock').setLevel(logging.INFO)
+  logging.getLogger('matplotlib.font_manager').setLevel(logging.INFO)
+  logging.getLogger('fsspec').setLevel(logging.INFO)
+  logging.getLogger('zarr').setLevel(logging.INFO)
+
+  logging_redirect_tqdm().__enter__()
 
 
 def get_git_hash() -> str | None:
-    """Get git commit hash of the project if it is a git repository.
-
-    Returns
-    -------
-    str | None
-        Git commit hash if project is a git repository, else None.
-    """
-    # get git commit hash if folder is a git repository
-    current_dir = str(Path(__file__).absolute().parent)
-    try:
-        if (
-            subprocess.call(
-                ['git', '-C', current_dir, 'branch'],
-                stderr=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-            )
-            == 0
-        ):
-            return (
+  """Get git commit hash of the project if it is a git repository."""
+  current_dir = str(Path(__file__).absolute().parent)
+  try:
+    if (
+        subprocess.call(
+            ['git', '-C', current_dir, 'branch'],
+            stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+        )
+        == 0
+    ):
+      return (
                 subprocess.check_output(
                     ['git', '-C', current_dir, 'describe', '--always']
                 )
                 .strip()
                 .decode('ascii')
             )
-    except OSError:
-        return None  # likely, git is not installed.
+  except Exception:
+    return None
+  return None
 
 
 def save_git_diff(run_dir: Path):
-    """Try to store the git diff to a file.
-
-    Parameters
-    ----------
-    run_dir : Path
-        Directory of the current run.
-    """
-    base_dir = str(Path(__file__).absolute().parent)
-    try:
-        # diff should include staged and unstaged changes, hence we use "HEAD"
-        out = subprocess.check_output(
-            ['git', '-C', base_dir, 'diff', 'HEAD'], stderr=subprocess.DEVNULL
-        )
-    except OSError:
-        LOGGER.warning(
-            'Could not store git diff, likely because git is not installed '
-            'or because your version of git is too old (< 1.8.5)'
-        )
-        return
-
+  """Try to store the git diff to a file."""
+  base_dir = str(Path(__file__).absolute().parent)
+  try:
+    out = subprocess.check_output(
+        ['git', '-C', base_dir, 'diff', 'HEAD'], stderr=subprocess.DEVNULL
+    )
     new_diff = out.strip().decode('utf-8')
-
-    if new_diff:
-        existing_diffs = list(run_dir.glob('googlehydrology*.diff'))
-        if len(existing_diffs) > 0:
-            last_diff_path = (
-                run_dir / f'googlehydrology-{len(existing_diffs) - 1}.diff'
-            )
-            with last_diff_path.open('r') as last_diff_file:
-                last_diff = last_diff_file.read()
-            if last_diff == new_diff:
-                LOGGER.info(
-                    f'Git repository contains uncommitted changes that are stored in {last_diff_path}.'
-                )
-                return
-
-        file_path = run_dir / f'googlehydrology-{len(existing_diffs)}.diff'
-        LOGGER.warning(
-            f'Git repository contains uncommitted changes. Writing diff to {file_path}.'
-        )
-        with file_path.open('w') as diff_file:
-            diff_file.write(new_diff)
+    if new_diff and not str(run_dir).startswith('/cns/'):
+      file_path = run_dir / 'googlehydrology.diff'
+      with open(str(file_path), 'w') as diff_file:
+        diff_file.write(new_diff)
+  except Exception:
+    pass

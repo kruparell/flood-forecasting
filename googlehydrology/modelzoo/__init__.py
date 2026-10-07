@@ -12,20 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import torch
-import torch.nn as nn
-
+# from googlehydrology.modelzoo.arlstm import ARLSTM
 from googlehydrology.modelzoo.handoff_forecast_lstm import HandoffForecastLSTM
+from googlehydrology.modelzoo.masked_forecast_lstm import MaskedForecastLSTM
 from googlehydrology.modelzoo.mean_embedding_forecast_lstm import (
     MeanEmbeddingForecastLSTM,
 )
 from googlehydrology.utils.config import Config
+import torch
+import torch.nn as nn
 
-ASSIMILATION_MODELS = ['mean_embedding_forecast_lstm']
+ASSIMILATION_MODELS = [
+    'arlstm',
+    'mean_embedding_forecast_lstm',
+    'masked_forecast_lstm',
+    'mf2lstm',
+]
 
 
 def get_model(cfg: Config) -> nn.Module:
-    """Get model object, depending on the run configuration.
+  """Get model object, depending on the run configuration.
 
     Parameters
     ----------
@@ -37,18 +43,22 @@ def get_model(cfg: Config) -> nn.Module:
     nn.Module
         A new model instance of the type specified in the config.
     """
-    if cfg.model.lower() not in ASSIMILATION_MODELS and cfg.assimilation_config:
-        raise ValueError(f"Model {cfg.model} does not support data assimilation.")
+  if cfg.model.lower() not in ASSIMILATION_MODELS and cfg.assimilation_config:
+    raise ValueError(f'Model {cfg.model} does not support data assimilation.')
 
-    if cfg.model.lower() == 'handoff_forecast_lstm':
-        model = HandoffForecastLSTM(cfg=cfg)
-    elif cfg.model.lower() == 'mean_embedding_forecast_lstm':
-        model = MeanEmbeddingForecastLSTM(cfg=cfg)
-    else:
-        raise NotImplementedError(
-            f'{cfg.model} not implemented or not linked in `get_model()`'
-        )
+  if cfg.model.lower() == 'handoff_forecast_lstm':
+    model = HandoffForecastLSTM(cfg=cfg)
+  elif cfg.model.lower() == 'mean_embedding_forecast_lstm':
+    model = MeanEmbeddingForecastLSTM(cfg=cfg)
+  elif cfg.model.lower() == 'arlstm':
+    model = ARLSTM(cfg=cfg)
+  elif cfg.model.lower() in ['masked_forecast_lstm', 'mf2lstm']:
+    model = MaskedForecastLSTM(cfg=cfg)
+  else:
+    raise NotImplementedError(
+        f'{cfg.model} not implemented or not linked in `get_model()`'
+    )
 
-    if cfg.compile:
-        return torch.compile(model, mode='max-autotune')
-    return model
+  if cfg.compile:
+    return torch.compile(model, mode='max-autotune')
+  return model

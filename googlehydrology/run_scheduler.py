@@ -14,12 +14,12 @@
 # limitations under the License.
 
 import argparse
+from pathlib import Path
 import random
 import shutil
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 import numpy as np
 
@@ -161,4 +161,4 @@ def schedule_runs(
 
 
 if __name__ == '__main__':
-    _main()
+  _main()

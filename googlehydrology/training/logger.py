@@ -15,13 +15,12 @@
 from collections import defaultdict
 from pathlib import Path
 
-import matplotlib as mpl
-import numpy as np
-from torch.utils.tensorboard import SummaryWriter
-
 from googlehydrology.__about__ import __version__
 from googlehydrology.utils.config import Config
 from googlehydrology.utils.logging_utils import get_git_hash, save_git_diff
+import matplotlib as mpl
+import numpy as np
+from torch.utils.tensorboard import SummaryWriter
 
 
 class Logger(object):

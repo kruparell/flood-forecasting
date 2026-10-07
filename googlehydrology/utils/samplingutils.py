@@ -14,11 +14,11 @@
 
 from typing import Callable
 
-import torch
-
 from googlehydrology.datautils.scaler import Scaler
 from googlehydrology.utils import cmal_deterministic
 from googlehydrology.utils.config import Config
+import numpy as np
+import torch
 
 
 def sample_pointpredictions(
@@ -29,7 +29,7 @@ def sample_pointpredictions(
     *,
     outputs: dict[str, torch.Tensor] | None = None,
 ) -> dict[str, torch.Tensor]:
-    """Point prediction samplers for the different uncertainty estimation approaches.
+  """Point prediction samplers for the different uncertainty estimation approaches.
 
     This function provides different point sampling functions for the different uncertainty estimation approaches
     (e.g. Gaussian Mixture Models (GMM), Countable Mixtures of Asymmetric Laplacians (CMAL), Monte-Carlo Dropout (MCD);
@@ -59,19 +59,21 @@ def sample_pointpredictions(
         each frequency.
     """
 
-    if model.cfg.head.lower() == 'cmal':
-        samples = sample_cmal(model, data, n_samples, scaler, outputs=outputs)
-    elif model.cfg.head.lower() == 'cmal_deterministic':
-        samples = sample_cmal_deterministic(model, data, outputs=outputs)
-    elif model.cfg.head.lower() == 'regression':  # regression head assumes mcd
-        assert not outputs, 'regression self creates outputs'
-        samples = sample_mcd(model, data, n_samples, scaler)
-    else:
-        raise NotImplementedError(
-            f'Sampling mode not supported for head {model.cfg.head.lower()}!'
-        )
+  if model.cfg.head.lower() == 'cmal':
+    samples = sample_cmal(model, data, n_samples, scaler, outputs=outputs)
+  elif model.cfg.head.lower() == 'cmal_deterministic':
+    samples = sample_cmal_deterministic(
+        model, data, scaler=scaler, outputs=outputs
+    )
+  elif model.cfg.head.lower() == 'regression':  # regression head assumes mcd
+    assert not outputs, 'regression self creates outputs'
+    samples = sample_mcd(model, data, n_samples, scaler)
+  else:
+    raise NotImplementedError(
+        f'Sampling mode not supported for head {model.cfg.head.lower()}!'
+    )
 
-    return samples
+  return samples
 
 
 def _subset_target(
@@ -107,7 +109,7 @@ def _handle_negative_values(
     sample_values: Callable,
     normalized_zero: torch.Tensor,
 ) -> torch.Tensor:
-    """Handle negative samples that arise while sampling from the uncertainty estimates.
+  """Handle negative samples that arise while sampling from the uncertainty estimates.
 
     Currently supports (a) 'clip' for directly clipping values at zero and (b) 'truncate' for resampling values
     that are below zero.
@@ -129,25 +131,31 @@ def _handle_negative_values(
     torch.Tensor
         Bound values according to user specifications.
     """
-    match (cfg.negative_sample_handling or '').lower():
-        case 'clip':
-            return torch.clamp(values, min=normalized_zero)
-        case 'truncate':
-            values_smaller_zero = values < normalized_zero
-            try_count = 0
-            while torch.any(values_smaller_zero.flatten()):
-                values[values_smaller_zero] = sample_values(values_smaller_zero)
-                values_smaller_zero = values < normalized_zero
-                try_count += 1
-                if try_count >= cfg.negative_sample_max_retries:
-                    break
-            return values
-        case '' | 'none':
-            return values
-        case _:
-            raise NotImplementedError(
-                f'The option {cfg.negative_sample_handling} is not supported for handling negative samples!'
-            )
+  match (cfg.negative_sample_handling or '').lower():
+    case 'clip':
+      return torch.clamp(values, min=normalized_zero)
+    case 'truncate':
+      values = values.clone()
+      values_smaller_zero = values < normalized_zero
+      try_count = 0
+      while torch.any(values_smaller_zero.flatten()):
+        resampled = sample_values(values_smaller_zero)
+        if resampled.shape == values.shape:
+          values[values_smaller_zero] = resampled[values_smaller_zero]
+        else:
+          values[values_smaller_zero] = resampled
+        values_smaller_zero = values < normalized_zero
+        try_count += 1
+        if try_count >= cfg.negative_sample_max_retries:
+          break
+      return torch.clamp(values, min=normalized_zero)
+    case '' | 'none':
+      return values
+    case _:
+      raise NotImplementedError(
+          f'The option {cfg.negative_sample_handling} is not supported for'
+          ' handling negative samples!'
+      )
 
 
 def _sample_asymmetric_laplacians(
@@ -172,60 +180,128 @@ def _sample_asymmetric_laplacians(
 
 
 class _SamplingSetup:
-    def __init__(
+  def __init__(
         self, model: 'BaseModel', data: dict[str, torch.Tensor], head: str
     ):
-        # make model checks:
-        cfg = model.cfg
-        if not cfg.head.lower() == head.lower():
-            raise NotImplementedError(
+    # make model checks:
+    cfg = model.cfg
+    if not cfg.head.lower() == head.lower():
+      raise NotImplementedError(
                 f'{head} sampling not supported for the {cfg.head} head!'
             )
 
-        dropout_rates = []
-        if hasattr(model, 'dropout') and hasattr(model.dropout, 'p'):
-            dropout_rates.append(model.dropout.p)
-        if hasattr(model, 'modules'):
-            for m in model.modules():
-                if isinstance(
-                    m, (torch.nn.Dropout, torch.nn.modules.dropout._DropoutNd)
-                ):
-                    dropout_rates.append(m.p)
-                elif (
-                    isinstance(m, torch.nn.LSTM)
-                    and m.num_layers > 1
-                    and m.dropout > 0
-                ):
-                    dropout_rates.append(m.dropout)
+    dropout_modules = [model.dropout.p]
 
-        max_implied_dropout = max(dropout_rates, default=0.0)
-        # check lower bound dropout:
-        if cfg.mc_dropout and max_implied_dropout <= 0.0:
-            raise RuntimeError(
-                f'{cfg.model} with `mc_dropout` activated requires a dropout'
-                f' rate larger than 0.0, but maximum implied dropout is {max_implied_dropout}.'
-            )
-        # check upper bound dropout:
-        if cfg.mc_dropout and max_implied_dropout >= 1.0:
-            raise RuntimeError(
-                f'The maximal dropout-rate is 1. Please check your settings; '
-                f'maximum implied dropout is {max_implied_dropout}.'
-            )
+    # Certain models don't have embedding_net(s)
+    implied_statics_embedding = None
+    implied_dynamics_embedding = None
+    implied_forecast_statics_embedding = None
+    implied_forecast_dynamics_embedding = None
+    implied_hindcast_statics_embedding = None
+    implied_hindcast_dynamics_embedding = None
+    if hasattr(model, 'forecast_embedding_net'):
+      implied_forecast_dynamics_embedding = getattr(
+          model.forecast_embedding_net,
+          'dynamics_embedding_p_dropout',
+          getattr(model.forecast_embedding_net, 'dropout', None),
+      )
+      implied_forecast_statics_embedding = getattr(
+          model.forecast_embedding_net,
+          'statics_embedding_p_dropout',
+          None,
+      )
+      if implied_forecast_dynamics_embedding is not None:
+        dropout_modules.append(implied_forecast_dynamics_embedding)
+      if implied_forecast_statics_embedding is not None:
+        dropout_modules.append(implied_forecast_statics_embedding)
+    if hasattr(model, 'hindcast_embedding_net'):
+      implied_hindcast_dynamics_embedding = getattr(
+          model.hindcast_embedding_net,
+          'dynamics_embedding_p_dropout',
+          getattr(model.hindcast_embedding_net, 'dropout', None),
+      )
+      implied_hindcast_statics_embedding = getattr(
+          model.hindcast_embedding_net,
+          'statics_embedding_p_dropout',
+          None,
+      )
+      if implied_hindcast_dynamics_embedding is not None:
+        dropout_modules.append(implied_hindcast_dynamics_embedding)
+      if implied_hindcast_statics_embedding is not None:
+        dropout_modules.append(implied_hindcast_statics_embedding)
+    if hasattr(model, 'statics_embedding_net'):
+      implied_statics_embedding = getattr(
+          model.statics_embedding_net,
+          'statics_embedding_p_dropout',
+          getattr(model.statics_embedding_net, 'dropout', None),
+      )
+      if implied_statics_embedding is not None:
+        dropout_modules.append(implied_statics_embedding)
+    if hasattr(model, 'embedding_net'):
+      implied_statics_embedding = getattr(
+          model.embedding_net,
+          'statics_embedding_p_dropout',
+          None,
+      )
+      implied_dynamics_embedding = getattr(
+          model.embedding_net,
+          'dynamics_embedding_p_dropout',
+          None,
+      )
+      if implied_statics_embedding is not None:
+        dropout_modules.append(implied_statics_embedding)
+      if implied_dynamics_embedding is not None:
+        dropout_modules.append(implied_dynamics_embedding)
 
-        # assign setup properties:
-        self.cfg = cfg
-        self.device = next(model.parameters()).device
-        self.number_of_targets = len(cfg.target_variables)
-        self.mc_dropout = cfg.mc_dropout
-        self.predict_last_n = cfg.predict_last_n
+    max_implied_dropout = max(dropout_modules)
+    # check lower bound dropout:
+    if cfg.mc_dropout and max_implied_dropout <= 0.0:
+      raise RuntimeError(
+          f'{cfg.model} with `mc_dropout` activated requires a dropout'
+          ' rate larger than 0.0. Implied dropout-rates:\n'
+          f'  - model: {cfg.output_dropout}\n'
+          f'  - statics_embedding: {implied_statics_embedding}\n'
+          f'  - dynamics_embedding: {implied_dynamics_embedding}\n'
+          '  - statics_forecast_embedding: '
+          f'{implied_forecast_statics_embedding}\n'
+          '  - dynamics_forecast_embedding: '
+          f'{implied_forecast_dynamics_embedding}\n'
+          '  - statics_hindcast_embedding: '
+          f'{implied_hindcast_statics_embedding}\n'
+          '  - dynamics_hindcast_embedding: '
+          f'{implied_hindcast_dynamics_embedding}'
+      )
+    # check upper bound dropout:
+    if cfg.mc_dropout and max_implied_dropout >= 1.0:
+      raise RuntimeError(
+          'The maximal dropout-rate is 1. Please check your settings:\n'
+          f'  - model: {cfg.output_dropout}\n'
+          f'  - statics_embedding: {implied_statics_embedding}\n'
+          f'  - dynamics_embedding: {implied_dynamics_embedding}\n'
+          '  - statics_forecast_embedding: '
+          f'{implied_forecast_statics_embedding}\n'
+          '  - dynamics_forecast_embedding: '
+          f'{implied_forecast_dynamics_embedding}\n'
+          '  - statics_hindcast_embedding: '
+          f'{implied_hindcast_statics_embedding}\n'
+          '  - dynamics_hindcast_embedding: '
+          f'{implied_hindcast_dynamics_embedding}'
+      )
 
-        # determine appropriate frequency suffix:
-        if len(self.cfg.use_frequencies) > 1:
-            self.freq_suffixes = [f'_{freq}' for freq in cfg.use_frequencies]
-        else:
-            self.freq_suffixes = ['']
+    # assign setup properties:
+    self.cfg = cfg
+    self.device = next(model.parameters()).device
+    self.number_of_targets = len(cfg.target_variables)
+    self.mc_dropout = cfg.mc_dropout
+    self.predict_last_n = cfg.predict_last_n
 
-        self.batch_size_data = data[f'y{self.freq_suffixes[0]}'].shape[0]
+    # determine appropriate frequency suffix:
+    if len(self.cfg.use_frequencies) > 1:
+      self.freq_suffixes = [f'_{freq}' for freq in cfg.use_frequencies]
+    else:
+      self.freq_suffixes = ['']
+
+    self.batch_size_data = data[f'y{self.freq_suffixes[0]}'].shape[0]
 
 
 def _get_frequency_last_n(
@@ -330,56 +406,99 @@ def sample_mcd(
 def sample_cmal_deterministic(
     model: 'BaseModel',
     data: dict[str, torch.Tensor],
+    scaler: Scaler | None = None,
     *,
     outputs: dict[str, torch.Tensor] | None = None,
 ) -> dict[str, torch.Tensor]:
-    """Sample 10 point predictions with the Countable Mixture of Asymmetric Laplacians (CMAL) head.
+  """Sample point predictions with the Countable Mixture of Asymmetric Laplacians (CMAL) deterministic head.
 
-    Note: If the config setting 'mc_dropout' is true this function will force the model to train mode (`model.train()`)
-    and not set it back to its original state.
+  Note: If the config setting 'mc_dropout' is true this function will force the
+  model to train mode (`model.train()`)
+  and not set it back to its original state.
 
-    Parameters
-    ----------
-    model : BaseModel
-        A model with a CMAL head.
-    data : dict[str, torch.Tensor]
-        Dictionary, containing input features as key-value pairs.
-    outputs, optional
-        Model forward result
+  Parameters
+  ----------
+  model : BaseModel
+      A model with a CMAL head.
+  data : dict[str, torch.Tensor]
+      Dictionary, containing input features as key-value pairs.
+  scaler : Scaler, optional
+      Scaler of the run.
+  outputs, optional
+      Model forward result
 
-    Returns
-    -------
-    dict[str, torch.Tensor]
-        Dictionary, containing the sampled model outputs for the `predict_last_n` (config argument) time steps of
-        each frequency. The shape of the output tensor for each frequency is
-        ``[batch size, predict_last_n, n_samples]``.
-    """
-    setup = _SamplingSetup(model, data, 'cmal_deterministic')
+  Returns
+  -------
+  dict[str, torch.Tensor]
+      Dictionary, containing the sampled model outputs for the `predict_last_n`
+      (config argument) time steps of
+      each frequency. The shape of the output tensor for each frequency is
+      ``[batch size, predict_last_n, 1]``.
+  """
+  setup = _SamplingSetup(model, data, 'cmal_deterministic')
 
-    # force model into train mode if mc_dropout
-    if setup.mc_dropout:
-        model.train()
+  # force model into train mode if mc_dropout
+  if setup.mc_dropout:
+    model.train()
 
-    # Make predictions (forward pass). For CMAL head those are dist params and
-    # not point predictions.
-    pred = outputs or model(data)
+  # Make predictions (forward pass). For CMAL head those are dist params and
+  # not point predictions.
+  pred = outputs or model(data)
 
-    # Map output frequencies to final sample tensors:
-    samples = {}
+  # Map output frequencies to final sample tensors:
+  samples = {}
 
-    # Loop over all model output frequencies (e.g., 'daily', 'hourly').
-    for freq_suffix in setup.freq_suffixes:
-        mu = pred[f'mu{freq_suffix}']  # means
-        b = pred[f'b{freq_suffix}']  # scales
-        tau = pred[f'tau{freq_suffix}']  # asymmetries
-        pi = pred[f'pi{freq_suffix}']  # weights
+  if scaler is not None and setup.cfg.negative_sample_handling:
+    normalized_zeros = _calc_normalized_zero_thresholds(
+        scaler=scaler,
+        targets=setup.cfg.target_variables,
+        device=next(model.parameters()).device,
+        dtype=next(model.parameters()).dtype,
+    )
+  else:
+    normalized_zeros = None
 
-        sample_points = [
-            cmal_deterministic.generate_predictions(mu, b, tau, pi)
-        ]
-        samples[f'y_hat{freq_suffix}'] = torch.stack(sample_points, 2)
+  # Loop over all model output frequencies (e.g., 'daily', 'hourly').
+  for freq_suffix in setup.freq_suffixes:
+    frequency_last_n = _get_frequency_last_n(
+        setup.cfg.predict_last_n, freq_suffix, setup.cfg.use_frequencies
+    )
+    mu = pred[f'mu{freq_suffix}'][:, -frequency_last_n:, :]  # means
+    b = pred[f'b{freq_suffix}'][:, -frequency_last_n:, :]  # scales
+    tau = pred[f'tau{freq_suffix}'][:, -frequency_last_n:, :]  # asymmetries
+    pi = pred[f'pi{freq_suffix}'][:, -frequency_last_n:, :]  # weights
 
-    return samples
+    sample_points = []
+    for nth_target in range(setup.number_of_targets):
+      mu_target = _subset_target(mu, nth_target, setup.cfg.n_distributions)
+      b_target = _subset_target(b, nth_target, setup.cfg.n_distributions)
+      tau_target = _subset_target(tau, nth_target, setup.cfg.n_distributions)
+      pi_target = _subset_target(pi, nth_target, setup.cfg.n_distributions)
+
+      pred_target = cmal_deterministic.generate_predictions(
+          mu_target,
+          b_target,
+          tau_target,
+          pi_target,
+      )
+      # pred_target is [batch, time, 10] -> permute to [batch, 10, time]
+      pred_target_p = pred_target.permute(0, 2, 1)
+      if normalized_zeros is not None:
+        pred_bounded = _handle_negative_values(
+            setup.cfg,
+            pred_target_p,
+            sample_values=lambda _: pred_target_p,
+            normalized_zero=normalized_zeros[nth_target],
+        )
+      else:
+        pred_bounded = pred_target_p
+      # Permute back to [batch, time, 10]
+      sample_points.append(pred_bounded.permute(0, 2, 1))
+
+    # [batch, time, target, 10]
+    samples[f'y_hat{freq_suffix}'] = torch.stack(sample_points, dim=2)
+
+  return samples
 
 
 def sample_cmal(
@@ -390,7 +509,7 @@ def sample_cmal(
     *,
     outputs: dict[str, torch.Tensor] | None = None,
 ) -> dict[str, torch.Tensor]:
-    """Sample point predictions with the Countable Mixture of Asymmetric Laplacians (CMAL) head.
+  """Sample point predictions with the Countable Mixture of Asymmetric Laplacians (CMAL) head.
 
     This function generates `n_samples` CMAL sample points for each entry in the batch. Concretely, the model is
     executed once (forward pass) and then the sample points are generated by sampling from the resulting mixtures.
@@ -429,144 +548,210 @@ def sample_cmal(
         Uncertainty Estimation with Deep Learning for Rainfall-Runoff Modelling. arXiv preprint arXiv:2012.14295,
         2020.
     """
-    setup = _SamplingSetup(model, data, 'cmal')
+  setup = _SamplingSetup(model, data, 'cmal')
 
-    # force model into train mode if mc_dropout
-    if setup.mc_dropout:
-        model.train()
+  # force model into train mode if mc_dropout
+  if setup.mc_dropout:
+    model.train()
 
-    # Make predictions (forward pass). For CMAL head those are dist params and
-    # not point predictions.
-    pred = outputs or model(data)
+  # Make predictions (forward pass). For CMAL head those are dist params and
+  # not point predictions.
+  pred = outputs or model(data)
 
-    # Map output frequencies to final sample tensors:
-    samples = {}
+  # Map output frequencies to final sample tensors:
+  samples = {}
 
-    normalized_zeros = _calc_normalized_zero_thresholds(
+  normalized_zeros = _calc_normalized_zero_thresholds(
         scaler=scaler,
         targets=setup.cfg.target_variables,
         device=next(model.parameters()).device,
         dtype=next(model.parameters()).dtype,
     )
 
-    # Loop over all model output frequencies (e.g., 'daily', 'hourly').
-    for freq_suffix in setup.freq_suffixes:
-        # Get the number of time steps to predict for the current frequency
-        frequency_last_n = _get_frequency_last_n(
+  # Loop over all model output frequencies (e.g., 'daily', 'hourly').
+  for freq_suffix in setup.freq_suffixes:
+    # Get the number of time steps to predict for the current frequency
+    frequency_last_n = _get_frequency_last_n(
             setup.cfg.predict_last_n, freq_suffix, setup.cfg.use_frequencies
         )
 
-        # Extract the four parameters of the CMAL distributions.
-        m = pred[f'mu{freq_suffix}']  # location means
-        b = pred[f'b{freq_suffix}']  # scales
-        t = pred[f'tau{freq_suffix}']  # asymmetries
-        p = pred[f'pi{freq_suffix}']  # mixture weights
+    # Extract the four parameters of the CMAL distributions.
+    m = pred[f'mu{freq_suffix}']  # location means
+    b = pred[f'b{freq_suffix}']  # scales
+    t = pred[f'tau{freq_suffix}']  # asymmetries
+    p = pred[f'pi{freq_suffix}']  # mixture weights
 
-        sample_points = []  # (for each target parameter)
-        for nth_target in range(
+    sample_points = []  # (for each target parameter)
+    for nth_target in range(
             setup.number_of_targets
         ):  # e.g. streamflow, temp
-            # Slice each full param tensor from the model's concat'd params to get
-            # only the portion relevant to the current target.
-            m_target = _subset_target(
+      # Slice each full param tensor from the model's concat'd params to get
+      # only the portion relevant to the current target.
+      m_target = _subset_target(
                 m[:, -frequency_last_n:, :],
                 nth_target,
                 setup.cfg.n_distributions,
             )
-            b_target = _subset_target(
+      b_target = _subset_target(
                 b[:, -frequency_last_n:, :],
                 nth_target,
                 setup.cfg.n_distributions,
             )
-            t_target = _subset_target(
+      t_target = _subset_target(
                 t[:, -frequency_last_n:, :],
                 nth_target,
                 setup.cfg.n_distributions,
             )
-            p_target = _subset_target(
+      p_target = _subset_target(
                 p[:, -frequency_last_n:, :],
                 nth_target,
                 setup.cfg.n_distributions,
             )
 
-            assert (
+      assert (
                 m_target.shape
                 == b_target.shape
                 == t_target.shape
                 == p_target.shape
             )
-            batch_size, time_steps, n_dist = m_target.shape  # WLOG
+      batch_size, time_steps, n_dist = m_target.shape  # WLOG
 
-            # Make [batch, sample, time, dist] (expanded) tensor views of the targets.
-            # Unsqueeze to add a dim for samples: [batch, rime, dist] -> [batch, 1, time, dist].
-            # Expand to repeat the new dim without allocating new memory for it. So:
-            #     [batch, 1, time, dist] -> [batch, sample, time, dist].
-            m_exp = m_target.unsqueeze(1).expand(-1, n_samples, -1, -1)
-            b_exp = b_target.unsqueeze(1).expand(-1, n_samples, -1, -1)
-            t_exp = t_target.unsqueeze(1).expand(-1, n_samples, -1, -1)
-            p_exp = p_target.unsqueeze(1).expand(-1, n_samples, -1, -1)
+      # Make [batch, sample, time, dist] (expanded) tensor views of the targets.
+      # Unsqueeze to add a dim for samples: [batch, rime, dist] -> [batch, 1, time, dist].
+      # Expand to repeat the new dim without allocating new memory for it. So:
+      #     [batch, 1, time, dist] -> [batch, sample, time, dist].
+      m_exp = m_target.unsqueeze(1).expand(-1, n_samples, -1, -1)
+      b_exp = b_target.unsqueeze(1).expand(-1, n_samples, -1, -1)
+      t_exp = t_target.unsqueeze(1).expand(-1, n_samples, -1, -1)
+      p_exp = p_target.unsqueeze(1).expand(-1, n_samples, -1, -1)
 
-            # Distribute:
+      # Distribute:
 
-            # Prepare data for the Categorical dist.
-            # Categorical dist descrbies a random event with a fixed number of results
-            # where each one has a probability. Number of outcomes here is from 0 to
-            # n_dist-1, and probabilities are given by pi.
-            # Replace nan with uniform probability. Later those nans will be restored.
-            p_invalid = torch.isnan(p_exp)
-            p_safe = torch.where(
+      # Prepare data for the Categorical dist.
+      # Categorical dist descrbies a random event with a fixed number of results
+      # where each one has a probability. Number of outcomes here is from 0 to
+      # n_dist-1, and probabilities are given by pi.
+      # Replace nan with uniform probability. Later those nans will be restored.
+      p_invalid = torch.isnan(p_exp)
+      p_safe = torch.where(
                 p_invalid, torch.ones_like(p_exp) / n_dist, p_exp
             )
 
-            dist = torch.distributions.Categorical(probs=p_safe)
+      dist = torch.distributions.Categorical(probs=p_safe)
 
-            # Sample:
+      # Sample:
 
-            # Draw dist index for each sample and time step from the dist dim, to get
-            # [batch, sample, time].
-            # And add a dim to match the shape of the expanded params for gathering,
-            # for selecting which dist it is gathered from.
-            choices = dist.sample().unsqueeze(-1)
-            # For each param point, select from [batch, sample, time, dist] using
-            # choices index which is [batch, sample, time, 1] to find which dist
-            # to use, gathering that param using the index for it.
-            # Then squeeze out the dist dim.
-            m_sub = torch.gather(m_exp, dim=3, index=choices).squeeze(-1)
-            b_sub = torch.gather(b_exp, dim=3, index=choices).squeeze(-1)
-            t_sub = torch.gather(t_exp, dim=3, index=choices).squeeze(-1)
+      # Draw dist index for each sample and time step from the dist dim, to get
+      # [batch, sample, time].
+      # And add a dim to match the shape of the expanded params for gathering,
+      # for selecting which dist it is gathered from.
+      choices = dist.sample().unsqueeze(-1)
+      # For each param point, select from [batch, sample, time, dist] using
+      # choices index which is [batch, sample, time, 1] to find which dist
+      # to use, gathering that param using the index for it.
+      # Then squeeze out the dist dim.
+      m_sub = torch.gather(m_exp, dim=3, index=choices).squeeze(-1)
+      b_sub = torch.gather(b_exp, dim=3, index=choices).squeeze(-1)
+      t_sub = torch.gather(t_exp, dim=3, index=choices).squeeze(-1)
 
-            def sample_values(ids: torch.Tensor) -> torch.Tensor:
-                return _sample_asymmetric_laplacians(ids, m_sub, b_sub, t_sub)
+      def sample_values(ids: torch.Tensor) -> torch.Tensor:
+        return _sample_asymmetric_laplacians(ids, m_sub, b_sub, t_sub)
 
-            # Generate an initial value for every single pos via a mask of all `True`s,
-            # with the _sample_asymmetric_laplacians helper.
-            values_unbound = sample_values(
+      # Generate an initial value for every single pos via a mask of all `True`s,
+      # with the _sample_asymmetric_laplacians helper.
+      values_unbound = sample_values(
                 ids=torch.ones_like(m_sub, dtype=torch.bool)
             )
-            # Reshape it back since the helper has flattened dims.
-            values_unbound = values_unbound.reshape(
+      # Reshape it back since the helper has flattened dims.
+      values_unbound = values_unbound.reshape(
                 batch_size, n_samples, time_steps
             )
-            # Restore nans (squeezing out the dist dim from which it was gathered)
-            was_nan_mask = torch.gather(
+      # Restore nans (squeezing out the dist dim from which it was gathered)
+      was_nan_mask = torch.gather(
                 p_invalid, dim=3, index=choices
             ).squeeze(-1)
-            values_unbound[was_nan_mask] = torch.nan
+      values_unbound[was_nan_mask] = torch.nan
 
-            values = _handle_negative_values(  # Resample as needed
+      values = _handle_negative_values(  # Resample as needed
                 setup.cfg,
                 values_unbound,
                 sample_values=sample_values,
                 normalized_zero=normalized_zeros[nth_target],
             )
-            # Swap [batch, sample, time] to [batch, time, sample]
-            values = values.permute(0, 2, 1)
-            sample_points.append(values)
+      # Swap [batch, sample, time] to [batch, time, sample]
+      values = values.permute(0, 2, 1)
+      sample_points.append(values)
 
-        # torch.stack results for all targets into a single tensor for this freq.
-        # It stacks into a new dim for the targets at dim 2, so shape should be
-        # [batch, time, sample] -> [batch, time, target, sample].
-        samples[f'y_hat{freq_suffix}'] = torch.stack(sample_points, dim=2)
+    # torch.stack results for all targets into a single tensor for this freq.
+    # It stacks into a new dim for the targets at dim 2, so shape should be
+    # [batch, time, sample] -> [batch, time, target, sample].
+    samples[f'y_hat{freq_suffix}'] = torch.stack(sample_points, dim=2)
 
-    return samples
+  return samples
 
+
+def bernoulli_subseries_sampler(
+    data: np.ndarray,
+    missing_fraction: float,
+    mean_missing_length: float,
+    start_sampling_on: bool = True,
+) -> np.ndarray:
+  """Samples a timeseries according to a pair of Bernoulli processes.
+
+  Parameters
+  ----------
+  data : np.ndarray
+      Time series data to be sampled. Must be (N,) or (N, 1).
+  missing_fraction : float
+      Expected total fraction of points in a time series that are not sampled.
+  mean_missing_length : float
+      Expected length of continuous subsequences of un-sampled data from the
+      timeseries.
+  start_sampling_on: bool
+      Whether to start with the sampler turned "on" (True) or "off" (False) at
+      the first
+      timestep of the timeseries.
+
+  Returns
+  -------
+  np.ndarray
+      A copy of the timeseries with NaN's replacing elements that were not
+      sampled.
+  """
+  if missing_fraction == 0:
+    return data
+  if missing_fraction == 1:
+    return np.full(data.shape, np.nan)
+
+  if not (data.ndim == 1 or (data.ndim == 2 and data.shape[-1] == 1)):
+    raise ValueError('Shape of timeseries data must be N or (N, 1).')
+
+  if mean_missing_length < missing_fraction / (1 - missing_fraction):
+    raise ValueError(
+        'Incompatible distribution parameters in timeseries sampling. Must be: '
+        'mean_missing_length >= missing_fraction / (1-missing_fraction).'
+    )
+  if missing_fraction < 0 or missing_fraction > 1:
+    raise ValueError('Missing fraction must be in [0,1]')
+
+  if mean_missing_length <= 0:
+    raise ValueError('Mean missing length must be > 0.')
+
+  on_shift_rate = 1 / mean_missing_length
+  off_shift_rate = on_shift_rate * missing_fraction / (1 - missing_fraction)
+
+  sampled_data = np.full(data.shape, np.nan)
+  sampled_data[0] = data[0] if start_sampling_on else np.nan
+
+  up_switches = np.random.binomial(n=1, p=on_shift_rate, size=data.shape)
+  down_switches = np.random.binomial(n=1, p=off_shift_rate, size=data.shape)
+
+  for n in range(1, len(data)):
+    if np.isnan(sampled_data[n - 1]):
+      if up_switches[n]:
+        sampled_data[n] = data[n]
+    else:
+      if not down_switches[n]:
+        sampled_data[n] = data[n]
+
+  return sampled_data

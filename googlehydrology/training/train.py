@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import torch
+
+# Disable TorchDynamo / torch.compile to avoid Borglet C++/Inductor sandbox failures
+if hasattr(torch, '_dynamo'):
+  torch._dynamo.config.disable = True
+
 from googlehydrology.training.basetrainer import BaseTrainer
 from googlehydrology.utils.config import Config
 

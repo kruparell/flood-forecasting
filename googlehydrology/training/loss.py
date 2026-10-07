@@ -96,7 +96,11 @@ class BaseLoss(torch.nn.Module):
         self._target_weights = weights
 
     def forward(
-        self, prediction: dict[str, torch.Tensor], data: dict[str, torch.Tensor]
+        self,
+        prediction: dict[str, torch.Tensor],
+        data: dict[str, torch.Tensor],
+        predict_last_n: int | dict[str, int] | None = None,
+        other_model_data: dict[str, torch.Tensor] | None = None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Calculate the loss.
 
@@ -110,6 +114,10 @@ class BaseLoss(torch.nn.Module):
             Dictionary of ground truth data for each frequency. If more than one frequency is predicted,
             the keys must have suffixes ``_{frequency}``. For the required keys, refer to the documentation
             of the concrete loss.
+        predict_last_n : int or dict[str, int], optional
+            Override the config's predict_last_n during loss calculation.
+        other_model_data : dict[str, torch.Tensor], optional
+            Extra tensors (such as optimized or unassimilated embeddings) passed to regularization modules.
 
         Returns
         -------
@@ -121,10 +129,18 @@ class BaseLoss(torch.nn.Module):
         # unpack loss-specific additional arguments
         kwargs = {key: data[key] for key in self._additional_data}
 
+        if predict_last_n is not None:
+            if isinstance(predict_last_n, int):
+                p_last_n = {f: predict_last_n for f in self._frequencies}
+            else:
+                p_last_n = predict_last_n
+        else:
+            p_last_n = self._predict_last_n
+
         losses = []
         prediction_sub, ground_truth_sub = {}, {}
         for freq in self._frequencies:
-            if self._predict_last_n[freq] == 0:
+            if p_last_n.get(freq, 0) == 0:
                 continue  # no predictions for this frequency
             freq_suffix = '' if freq == '' else f'_{freq}'
 
@@ -138,7 +154,7 @@ class BaseLoss(torch.nn.Module):
                     key: data[f'{key}{freq_suffix}']
                     for key in self._ground_truth_keys
                 },
-                self._predict_last_n[freq],
+                p_last_n[freq],
             )
 
             # remember subsets for multi-frequency component
@@ -168,15 +184,20 @@ class BaseLoss(torch.nn.Module):
         total_loss = loss.clone()
         all_losses = defaultdict(lambda: 0)
         all_losses['loss'] = loss
+
+        combined_other = {
+            k: v
+            for k, v in prediction.items()
+            if k not in self._prediction_keys
+        }
+        if other_model_data is not None:
+            combined_other.update(other_model_data)
+
         for reg_module in self._regularization_terms:
             reg_out = reg_module(
                 prediction_sub,
                 ground_truth_sub,
-                {
-                    k: v
-                    for k, v in prediction.items()
-                    if k not in self._prediction_keys
-                },
+                combined_other,
             )
             total_loss += reg_module.weight * reg_out
             # One name may appear multiple times. We add all regularizations of the same name for logging purposes.
@@ -250,7 +271,7 @@ class BaseLoss(torch.nn.Module):
 
 
 class MaskedMSELoss(BaseLoss):
-    """Mean squared error loss.
+  """Mean squared error loss.
 
     To use this loss in a forward pass, the passed `prediction` dict must contain
     the key ``y_hat``, and the `data` dict must contain ``y``.
@@ -261,26 +282,28 @@ class MaskedMSELoss(BaseLoss):
         The run configuration.
     """
 
-    def __init__(self, cfg: Config):
-        super(MaskedMSELoss, self).__init__(
+  def __init__(self, cfg: Config):
+    super(MaskedMSELoss, self).__init__(
             cfg, prediction_keys=['y_hat'], ground_truth_keys=['y']
         )
 
-    def _get_loss(
+  def _get_loss(
         self,
         prediction: dict[str, torch.Tensor],
         ground_truth: dict[str, torch.Tensor],
         **kwargs,
     ):
-        mask = ~torch.isnan(ground_truth['y'])
-        loss = 0.5 * torch.mean(
-            (prediction['y_hat'][mask] - ground_truth['y'][mask]) ** 2
-        )
-        return loss
+    mask = ~torch.isnan(ground_truth['y'])
+    if not mask.any():
+      return torch.sum(prediction['y_hat']) * 0.0
+    loss = 0.5 * torch.mean(
+        (prediction['y_hat'][mask] - ground_truth['y'][mask]) ** 2
+    )
+    return loss
 
 
 class MaskedRMSELoss(BaseLoss):
-    """Root mean squared error loss.
+  """Root mean squared error loss.
 
     To use this loss in a forward pass, the passed `prediction` dict must contain
     the key ``y_hat``, and the `data` dict must contain ``y``.
@@ -291,29 +314,29 @@ class MaskedRMSELoss(BaseLoss):
         The run configuration.
     """
 
-    def __init__(self, cfg: Config):
-        super(MaskedRMSELoss, self).__init__(
+  def __init__(self, cfg: Config):
+    super(MaskedRMSELoss, self).__init__(
             cfg, prediction_keys=['y_hat'], ground_truth_keys=['y']
         )
 
-    def _get_loss(
+  def _get_loss(
         self,
         prediction: dict[str, torch.Tensor],
         ground_truth: dict[str, torch.Tensor],
         **kwargs,
     ):
-        mask = ~torch.isnan(ground_truth['y'])
-        loss = torch.sqrt(
-            0.5
-            * torch.mean(
-                (prediction['y_hat'][mask] - ground_truth['y'][mask]) ** 2
-            )
-        )
-        return loss
+    mask = ~torch.isnan(ground_truth['y'])
+    if not mask.any():
+      return torch.sum(prediction['y_hat']) * 0.0
+    loss = torch.sqrt(
+        0.5
+        * torch.mean((prediction['y_hat'][mask] - ground_truth['y'][mask]) ** 2)
+    )
+    return loss
 
 
 class MaskedNSELoss(BaseLoss):
-    """Basin-averaged Nash--Sutcliffe Model Efficiency Coefficient loss.
+  """Basin-averaged Nash--Sutcliffe Model Efficiency Coefficient loss.
 
     To use this loss in a forward pass, the passed `prediction` dict must contain
     the key ``y_hat``, and the `data` dict must contain ``y`` and ``per_basin_target_stds``.
@@ -334,48 +357,50 @@ class MaskedNSELoss(BaseLoss):
        *Hydrology and Earth System Sciences*, 2019, 23, 5089-5110, doi:10.5194/hess-23-5089-2019
     """
 
-    def __init__(self, cfg: Config, eps: float = 0.1):
-        super(MaskedNSELoss, self).__init__(
+  def __init__(self, cfg: Config, eps: float = 0.1):
+    super(MaskedNSELoss, self).__init__(
             cfg,
             prediction_keys=['y_hat'],
             ground_truth_keys=['y'],
             additional_data=['per_basin_target_stds'],
         )
-        self.eps = eps
+    self.eps = eps
 
-    def _get_loss(
+  def _get_loss(
         self,
         prediction: dict[str, torch.Tensor],
         ground_truth: dict[str, torch.Tensor],
         **kwargs,
     ):
-        mask = ~torch.isnan(ground_truth['y'])
-        y_hat = prediction['y_hat'][mask]
-        y = ground_truth['y'][mask]
-        per_basin_target_stds = kwargs['per_basin_target_stds']
-        # expand dimension 1 to predict_last_n
-        per_basin_target_stds = per_basin_target_stds.expand_as(
-            prediction['y_hat']
-        )[mask]
+    mask = ~torch.isnan(ground_truth['y'])
+    if not mask.any():
+      return torch.sum(prediction['y_hat']) * 0.0
+    y_hat = prediction['y_hat'][mask]
+    y = ground_truth['y'][mask]
+    per_basin_target_stds = kwargs['per_basin_target_stds']
+    # expand dimension 1 to predict_last_n
+    per_basin_target_stds = per_basin_target_stds.expand_as(
+        prediction['y_hat']
+    )[mask]
 
-        squared_error = (y_hat - y) ** 2
-        weights = 1 / (per_basin_target_stds + self.eps) ** 2
-        scaled_loss = weights * squared_error
-        return torch.mean(scaled_loss)
+    squared_error = (y_hat - y) ** 2
+    weights = 1 / (per_basin_target_stds + self.eps) ** 2
+    scaled_loss = weights * squared_error
+    return torch.mean(scaled_loss)
 
-    @staticmethod
-    def _subset_additional_data(
+  @staticmethod
+  def _subset_additional_data(
         additional_data: dict[str, torch.Tensor], n_target: int
     ) -> dict[str, torch.Tensor]:
-        # here we need to subset the per_basin_target_stds. We slice to keep the shape of [bs, seq, 1]
-        return {
+    # here we need to subset the per_basin_target_stds. We slice to keep the shape of [bs, seq, 1]
+    return {
             key: value[:, :, n_target : n_target + 1]
             for key, value in additional_data.items()
         }
 
 
 class MaskedCMALLoss(BaseLoss):
-    """Average negative log-likelihood for a model that uses the CMAL head.
+  """Average negative log-likelihood for a model that uses the CMAL head.
 
     Parameters
     ----------
@@ -385,40 +410,49 @@ class MaskedCMALLoss(BaseLoss):
         Small constant for numeric stability.
     """
 
-    def __init__(self, cfg: Config, eps: float = 1e-8):
-        super(MaskedCMALLoss, self).__init__(
+  def __init__(self, cfg: Config, eps: float = 1e-8):
+    super(MaskedCMALLoss, self).__init__(
             cfg,
             prediction_keys=['mu', 'b', 'tau', 'pi'],
             ground_truth_keys=['y'],
             output_size_per_target=cfg.n_distributions,
         )
-        self.eps = eps  # stability epsilon
+    self.eps = eps  # stability epsilon
 
-    def _get_loss(
+  def _get_loss(
         self,
         prediction: dict[str, torch.Tensor],
         ground_truth: dict[str, torch.Tensor],
         **kwargs,
     ):
-        mask = ~torch.isnan(ground_truth['y']).any(1).any(1)
-        y = ground_truth['y'][mask]
-        m = prediction['mu'][mask]
-        b = prediction['b'][mask]
-        t = prediction['tau'][mask]
-        p = prediction['pi'][mask]
+    y = ground_truth['y'].float()
+    m = prediction['mu'].float()
+    b = prediction['b'].float()
+    t = prediction['tau'].float()
+    p = prediction['pi'].float()
 
-        error = y - m
-        log_like = (
-            torch.log(t)
-            + torch.log(1.0 - t)
-            - torch.log(b)
-            - torch.max(t * error, (t - 1.0) * error) / b
-        )
-        log_weights = torch.log(p + self.eps)
+    mask = ~torch.isnan(y)
+    if not mask.any():
+      return torch.sum(m) * 0.0
 
-        result = torch.logsumexp(log_weights + log_like, dim=2)
-        result = -torch.mean(torch.sum(result, dim=1))
-        return result
+    safe_y = torch.where(mask, y, torch.zeros_like(y))
+    safe_m = torch.where(mask, m, torch.zeros_like(m))
+    error = safe_y - safe_m
+
+    t = torch.clamp(t, min=1e-6, max=1.0 - 1e-6)
+    b = torch.clamp(b, min=1e-5, max=1e5)
+    p = torch.clamp(p, min=self.eps, max=1.0)
+
+    scaled_error = torch.max(t * error, (t - 1.0) * error) / b
+    scaled_error = torch.clamp(scaled_error, min=0.0, max=80.0)
+
+    log_like = torch.log(t) + torch.log(1.0 - t) - torch.log(b) - scaled_error
+    log_weights = torch.log(p)
+
+    log_p = torch.logsumexp(log_weights + log_like, dim=-1, keepdim=True)
+    valid_log_p = log_p[mask]
+    result = -torch.mean(valid_log_p)
+    return result
 
 
 def _get_predict_last_n(cfg: Config) -> dict:
@@ -430,3 +464,4 @@ def _get_predict_last_n(cfg: Config) -> dict:
             '': list(predict_last_n.values())[0]
         }  # if there's only one frequency, we omit its identifier
     return predict_last_n
+

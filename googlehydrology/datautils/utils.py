@@ -12,16 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import functools
-import re
 from collections import defaultdict
+import functools
+import logging
 from pathlib import Path
+import re
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 from pandas.tseries.frequencies import to_offset
+import xarray as xr
 from xarray.core.dataarray import DataArray
 from xarray.core.dataset import Dataset
+
+LOGGER = logging.getLogger(__name__)
 
 # Pandas switched from "Y" to "YE" and similar identifiers in 2.2.0. This snippet checks which one is correct for the
 # current pandas installation.
@@ -29,48 +34,180 @@ _YE_FREQ = 'YE'
 _ME_FREQ = 'ME'
 _QE_FREQ = 'QE'
 try:
-    to_offset(_YE_FREQ)
+  to_offset(_YE_FREQ)
 except ValueError:
-    _YE_FREQ = 'Y'
-    _ME_FREQ = 'M'
-    _QE_FREQ = 'Q'
+  _YE_FREQ = 'Y'
+  _ME_FREQ = 'M'
+  _QE_FREQ = 'Q'
 
 
-def load_basin_file(basin_file: Path) -> list[str]:
-    """Load list of basins from text file.
+from googlehydrology.utils.gfile_utils import gfile_open
 
-    Note: Basins names are not allowed to end with '_period*'
 
-    Parameters
-    ----------
-    basin_file : Path
-        Path to a basin txt file. File has to contain one basin id per row, while empty rows are ignored.
+def check_and_select_basins(
+    ds: xr.Dataset,
+    requested_basins: List[str],
+    dataset_name: str = 'Dataset',
+    strict: bool = False,
+) -> Tuple[xr.Dataset, List[str]]:
+  """Safely slices ds along 'basin', preserving input order, deduplicating, and reporting missing basins."""
+  if not requested_basins or 'basin' not in ds.coords:
+    return ds, []
 
-    Returns
-    -------
-    list[str]
-        List of basin ids as strings.
+  available = ds.coords['basin'].values
+  available_set = set(available)
+  lower_map = {str(b).lower(): b for b in available}
 
-    Raises
-    ------
-    ValueError
-        In case of invalid basin names that would cause problems internally.
-    """
-    with basin_file.open('r') as fp:
-        basins = sorted(basin.strip() for basin in fp if basin.strip())
+  valid_ordered = []
+  seen_valid = set()
+  missing = []
+  seen_requested = set()
 
-    # sanity check basin names
-    problematic_basins = [
-        basin for basin in basins if basin.split('_')[-1].startswith('period')
+  for b in requested_basins:
+    if b in seen_requested:
+      continue
+    seen_requested.add(b)
+
+    if b in available_set:
+      if b not in seen_valid:
+        valid_ordered.append(b)
+        seen_valid.add(b)
+    else:
+      b_str = str(b).lower()
+      if b_str in lower_map:
+        matched = lower_map[b_str]
+        if matched not in seen_valid:
+          valid_ordered.append(matched)
+          seen_valid.add(matched)
+      else:
+        missing.append(b)
+
+  if missing:
+    msg = (
+        f'[{dataset_name}] {len(missing)} of {len(seen_requested)} requested'
+        ' basins are MISSING from coordinates.\nMissing Basins'
+        f' ({len(missing)}): {missing}'
+    )
+    if strict:
+      raise KeyError(msg)
+    else:
+      LOGGER.warning(msg)
+
+  if not valid_ordered:
+    raise KeyError(
+        f'[{dataset_name}] ZERO matching basins found out of'
+        f' {len(seen_requested)} requested basins! Available sample:'
+        f' {list(available)[:10]}'
+    )
+  return ds.sel(basin=valid_ordered), missing
+
+
+def safe_sel_basins(
+    ds: Dataset,
+    requested_basins: list[str],
+    dataset_name: str = 'Dataset',
+) -> Dataset:
+  """Backward-compatible wrapper returning only the sliced dataset along 'basin'."""
+  sliced_ds, _ = check_and_select_basins(
+      ds, requested_basins, dataset_name=dataset_name, strict=False
+  )
+  return sliced_ds
+
+
+def validate_streamflow_series(
+    ds_streamflow: xr.Dataset,
+    basin_id: str,
+    start_date: str,
+    end_date: str,
+    strict: bool = True,
+) -> None:
+  """Validates that streamflow has no NaNs across [start_date, end_date]; fails fast if empty or NaNs present."""
+  var_candidates = [
+      'streamflow',
+      'streamflow_obs',
+      'QObs(mm/d)',
+      'QObs',
+      'discharge',
+  ]
+  target_var = next((v for v in var_candidates if v in ds_streamflow), None)
+  if target_var is None:
+    raise ValueError(
+        'Streamflow target variable not found in dataset for basin'
+        f" '{basin_id}'. Available: {list(ds_streamflow.data_vars)}"
+    )
+
+  slice_b = ds_streamflow[target_var].sel(date=slice(start_date, end_date))
+  vals = slice_b.values
+  if len(vals) == 0:
+    msg = (
+        f"[DATA INTEGRITY ERROR] Streamflow slice for basin '{basin_id}'"
+        f' between {start_date} and {end_date} is completely EMPTY (0 records)!'
+    )
+    if strict:
+      raise ValueError(msg)
+    else:
+      LOGGER.warning(msg)
+      return
+
+  nan_mask = np.isnan(vals)
+  nan_count = int(np.sum(nan_mask))
+  if nan_count > 0:
+    nan_dates = slice_b['date'].values[nan_mask]
+    first_nan = str(nan_dates[0])[:10]
+    last_nan = str(nan_dates[-1])[:10]
+    msg = (
+        f"[DATA INTEGRITY ERROR] Streamflow for basin '{basin_id}' contains "
+        f'{nan_count} NaNs during interval {start_date} to {end_date}! '
+        f'First NaN: {first_nan}, Last NaN: {last_nan}.'
+    )
+    if strict:
+      raise ValueError(msg)
+    else:
+      LOGGER.warning(msg)
+
+
+def load_basin_file(basin_file: Path | str) -> list[str]:
+  """Load list of basins from text file across CNS or local filesystems.
+
+  Note: Basins names are not allowed to end with '_period*'
+
+  Parameters
+  ----------
+  basin_file : Path or str
+      Path to a basin txt file. File has to contain one basin id per row, while
+      empty rows are ignored.
+
+  Returns
+  -------
+  list[str]
+      List of basin ids as strings.
+
+  Raises
+  ------
+  ValueError
+      In case of invalid basin names that would cause problems internally.
+  """
+  with gfile_open(basin_file, 'r') as fp:
+    raw_lines = [
+        line.decode('utf-8', errors='ignore')
+        if isinstance(line, bytes)
+        else str(line)
+        for line in fp
     ]
-    if problematic_basins:
-        msg = [
+    basins = sorted(basin.strip() for basin in raw_lines if basin.strip())
+
+  # sanity check basin names
+  problematic_basins = [
+      basin for basin in basins if basin.split('_')[-1].startswith('period')
+  ]
+  if problematic_basins:
+    msg = [
             f'The following basin names are invalid {problematic_basins}. Check documentation of the ',
             "'load_basin_file()' functions for details.",
         ]
-        raise ValueError(' '.join(msg))
+    raise ValueError(' '.join(msg))
 
-    return basins
+  return basins
 
 
 def sort_frequencies(frequencies: list[str]) -> list[str]:

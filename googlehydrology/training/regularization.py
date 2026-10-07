@@ -125,3 +125,93 @@ class ForecastOverlapMSERegularization(BaseRegularization):
         forecast = other_model_output['y_forecast_overlap']
         loss += torch.mean((hindcast - forecast) ** 2)
         return loss
+
+
+class BackgroundEmbeddingRegularization(BaseRegularization):
+  """L2 regularization penalizing deviation of optimized embeddings from unassimilated baseline embeddings.
+
+  Parameters
+  ----------
+  cfg : Config
+      The run configuration.
+  weight : float, optional
+      Global weight multiplier, default 1.0.
+  name : str, optional
+      Name of the regularization term, default 'bg_embedding'.
+  """
+
+  def __init__(
+      self, cfg: Config, weight: float = 1.0, name: str = 'bg_embedding'
+  ):
+    super(BackgroundEmbeddingRegularization, self).__init__(
+        cfg, name=name, weight=weight
+    )
+    self.bg_dyn_weight = float(
+        getattr(
+            cfg,
+            'bg_dyn_weight',
+            getattr(cfg, 'regularization_weight', 0.01),
+        )
+    )
+    self.bg_stat_weight = float(getattr(cfg, 'bg_stat_weight', 1e-6))
+
+  def forward(
+      self,
+      prediction: dict[str, torch.Tensor],
+      ground_truth: dict[str, torch.Tensor],
+      other_model_output: dict[str, torch.Tensor],
+  ) -> torch.Tensor:
+    loss = 0.0
+    opt_comps = other_model_output.get('optimized_components', {})
+    base_comps = other_model_output.get('baseline_components', {})
+    comp_weights = other_model_output.get('component_weights', {})
+    for comp_name, opt_t in opt_comps.items():
+      base_t = base_comps.get(comp_name)
+      if opt_t is not None and base_t is not None and opt_t.requires_grad:
+        w = float(comp_weights.get(comp_name, self.bg_dyn_weight))
+        loss = loss + w * torch.mean((opt_t - base_t) ** 2)
+    return (
+        loss
+        if isinstance(loss, torch.Tensor)
+        else torch.tensor(loss, dtype=torch.float32)
+    )
+
+
+
+class PriorPredictionRegularization(BaseRegularization):
+  """Regularization penalizing deviation of assimilated model predictions from prior unassimilated predictions.
+
+  Parameters
+  ----------
+  cfg : Config
+      The run configuration.
+  weight : float, optional
+      Penalty weight multiplier, default 1.0.
+  name : str, optional
+      Name of the regularization term, default 'prior_prediction'.
+  """
+
+  def __init__(
+      self, cfg: Config, weight: float = 1.0, name: str = 'prior_prediction'
+  ):
+    super(PriorPredictionRegularization, self).__init__(
+        cfg, name=name, weight=weight
+    )
+
+  def forward(
+      self,
+      prediction: dict[str, torch.Tensor],
+      ground_truth: dict[str, torch.Tensor],
+      other_model_output: dict[str, torch.Tensor],
+  ) -> torch.Tensor:
+    prior_y_hat = other_model_output.get('baseline_y_hat')
+    y_hat = prediction.get('y_hat')
+    if prior_y_hat is None or y_hat is None:
+      return torch.tensor(0.0, dtype=torch.float32)
+    min_len = min(y_hat.shape[1], prior_y_hat.shape[1])
+    diff = y_hat[:, :min_len, :] - prior_y_hat[:, :min_len, :]
+    mask = ~torch.isnan(diff)
+    if mask.any():
+      return torch.mean(diff[mask] ** 2)
+    return torch.tensor(0.0, dtype=torch.float32)
+

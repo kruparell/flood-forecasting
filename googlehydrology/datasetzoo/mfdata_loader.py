@@ -2,7 +2,7 @@
 
 import pickle
 import sys
-from pathlib import Path
+from etils.epath import Path
 
 from absl import app, flags
 

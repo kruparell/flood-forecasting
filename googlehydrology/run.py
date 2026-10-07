@@ -16,9 +16,7 @@
 import argparse
 import logging
 import sys
-from pathlib import Path
-
-import cachey
+from etils.epath import Path
 import dask
 import dask.cache
 import torch
@@ -36,81 +34,98 @@ from googlehydrology.utils.logging_utils import setup_logging
 
 
 def _get_args() -> dict:
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
+  parser = argparse.ArgumentParser()
+  parser.add_argument(
         'mode',
         choices=['train', 'continue_training', 'finetune', 'evaluate', 'infer'],
     )
-    parser.add_argument('--config-file', type=str)
-    parser.add_argument('--run-dir', type=str)
-    parser.add_argument(
+  parser.add_argument('--config-file', type=str)
+  parser.add_argument('--run-dir', type=str)
+  parser.add_argument(
         '--epoch',
         type=int,
         help='Epoch, of which the model should be evaluated',
     )
-    parser.add_argument(
+  parser.add_argument(
         '--period',
         type=str,
         choices=['train', 'validation', 'test'],
         default='test',
     )
-    parser.add_argument(
+  parser.add_argument(
         '--gpu',
         type=int,
         help="GPU id to use. Overrides config argument 'device'. Use a value < 0 for CPU.",
     )
-    parser.add_argument(
-        '--data-assimilation',
-        action='store_true',
-        default=False,
-        help='Enable Data Assimilation state-updating during evaluation and inference.',
-    )
-    args = vars(parser.parse_args())
+  parser.add_argument(
+      '--assimilate',
+      action='store_true',
+      default=False,
+      help='If True, runs evaluation/inference with data assimilation enabled.',
+  )
+  clean_argv = [
+      a
+      for a in sys.argv[1:]
+      if not a.startswith((
+          '--undefok',
+          '--streamz',
+          '--nobinarylog',
+          '--ddt',
+          '--rpc',
+          '--rate',
+          '--cfs',
+          '--rodos',
+          '--l4',
+          '--placer',
+          '--userspace',
+          '--census',
+      ))
+  ]
+  args = vars(parser.parse_known_args(clean_argv)[0])
 
-    if (args['mode'] in ['train', 'finetune']) and (
-        args['config_file'] is None
-    ):
-        raise ValueError('Missing path to config file')
+  if (args['mode'] in ['train', 'finetune']) and (args['config_file'] is None):
+    raise ValueError('Missing path to config file')
 
-    if (args['mode'] == 'continue_training') and (args['run_dir'] is None):
-        raise ValueError('Missing path to run directory file')
+  if (args['mode'] == 'continue_training') and (args['run_dir'] is None):
+    raise ValueError('Missing path to run directory file')
 
-    if (args['mode'] in ['evaluate', 'infer']) and (args['run_dir'] is None):
-        raise ValueError('Missing path to run directory')
+  if (args['mode'] in ['evaluate', 'infer']) and (args['run_dir'] is None):
+    raise ValueError('Missing path to run directory')
 
-    return args
+  return args
 
 
 def _main():
-    args = _get_args()
-    config = Config(
-        Path(args['config_file'] or Path(args['run_dir']) / 'config.yml')
-    )
+  args = _get_args()
+  config = Config(
+      Path(args['config_file'] or Path(args['run_dir']) / 'config.yml')
+  )
 
-    if (args['run_dir'] is not None) and (
+  if (args['run_dir'] is not None) and (
         args['mode'] in ['evaluate', 'infer']
     ):
-        setup_logging(
+    setup_logging(
             str(Path(args['run_dir']) / 'output.log'),
             config.logging_level,
             config.print_warnings_once,
         )
 
-    torch.autograd.set_detect_anomaly(config.detect_anomaly)
+  torch.autograd.set_detect_anomaly(config.detect_anomaly)
 
-    dask_config = {
+  dask_config = {
         'scheduler': 'threads',
         'shuffle': 'p2p',
     }
-    if config.use_swap_memory is not None:
-        dask_config['distributed.p2p.storage.disk'] = config.use_swap_memory
-    dask.config.set(dask_config)
+  if config.use_swap_memory is not None:
+    dask_config['distributed.p2p.storage.disk'] = config.use_swap_memory
+  dask.config.set(dask_config)
 
-    if config.cache.enabled:
-        dask.cache.Cache(cachey.Cache(config.cache.byte_limit)).register()
+  if config.cache.enabled:
+    import cachey
+    dask.cache.Cache(cachey.Cache(config.cache.byte_limit)).register()
 
-    if config.logging_level <= logging.DEBUG:
-        tqdm.dask.TqdmCallback(
+  if config.logging_level <= logging.DEBUG:
+    tqdm.dask.TqdmCallback(
             mininterval=2,
             unit='task',
             desc='compute',
@@ -119,35 +134,35 @@ def _main():
             tqdm_class=AutoRefreshTqdm,
         ).register()
 
-    # engines netcdf4 and h5netcdf fail parallelizing anyway
-    xarray.set_options(file_cache_maxsize=1)
+  # engines netcdf4 and h5netcdf fail parallelizing anyway
+  xarray.set_options(file_cache_maxsize=1)
 
-    if args['mode'] == 'train':
-        start_run(config=config, gpu=args['gpu'])
-    elif args['mode'] == 'continue_training':
-        continue_run(
+  if args['mode'] == 'train':
+    start_run(config=config, gpu=args['gpu'])
+  elif args['mode'] == 'continue_training':
+    continue_run(
             run_dir=Path(args['run_dir']),
             config_file=Path(args['config_file'])
             if args['config_file'] is not None
             else None,
             gpu=args['gpu'],
         )
-    elif args['mode'] == 'finetune':
-        finetune(config_file=Path(args['config_file']), gpu=args['gpu'])
-    elif args['mode'] in ['evaluate', 'infer']:
-        config.inference_mode = args['mode'] == 'infer'
-        if config.inference_mode:
-            config.tester_skip_obs_all_nan = False
-        eval_run(
+  elif args['mode'] == 'finetune':
+    finetune(config_file=Path(args['config_file']), gpu=args['gpu'])
+  elif args['mode'] in ['evaluate', 'infer']:
+    config.inference_mode = args['mode'] == 'infer'
+    if config.inference_mode:
+      config.tester_skip_obs_all_nan = False
+    eval_run(
             config,
             run_dir=Path(args['run_dir']),
             period=args['period'],
             epoch=args['epoch'],
             gpu=args['gpu'],
-            data_assimilation=args.get('data_assimilation', False),
+            assimilate=args['assimilate'],
         )
-    else:
-        raise RuntimeError(f'Unknown mode {args["mode"]}')
+  else:
+    raise RuntimeError(f'Unknown mode {args["mode"]}')
 
 
 def start_run(config: Config, gpu: int = None):
@@ -249,7 +264,7 @@ def eval_run(
     period: str,
     epoch: int = None,
     gpu: int = None,
-    data_assimilation: bool = False,
+    assimilate: bool = False,
 ):
     """Start evaluating a trained model.
 
@@ -266,8 +281,8 @@ def eval_run(
     gpu : int, optional
         GPU id to use. Will override config argument 'device'. A value less than zero indicates CPU.
         Don't use this argument if you want to use the device as specified in the config file e.g. MPS.
-    data_assimilation : bool, optional
-        Whether to enable Data Assimilation state-updating during evaluation.
+    assimilate : bool, optional
+        If True, runs evaluation/inference with data assimilation enabled.
 
     """
     # check if a GPU has been specified as command line argument. If yes, overwrite config
@@ -281,9 +296,20 @@ def eval_run(
         run_dir=run_dir,
         epoch=epoch,
         period=period,
-        data_assimilation=data_assimilation,
+        data_assimilation=assimilate,
     )
 
 
 if __name__ == '__main__':
-    _main()
+  import absl.app
+  from absl import flags
+
+  absl.app.run(
+      lambda _: _main(),
+      flags_parser=lambda argv: list(
+          flags.FLAGS(
+              [a for a in argv if a not in ('--help', '-h')], known_only=True
+          )
+      )
+      + [a for a in argv if a in ('--help', '-h')],
+  )
