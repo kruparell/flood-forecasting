@@ -16,3 +16,7 @@ Analysis code and basin definitions behind the paper. The DA engine itself lives
 
 External data: `~/Caravans_V2/{attributes,streamflow}.zarr`, `~/Caravans_MultiMet/`, `~/zenodo_2024_paper/`.
 CNS source of all results: `/cns/jn-d/home/floods/hydro_model/work/kruparell/large_scale_param_selection_results/`.
+
+`notebooks/03_interactive_da/` holds the earlier interactive run-DA-locally notebooks (01/02) and their helper; they
+pre-date the public `run infer --assimilate` CLI and were written against the google3-mirrored package, so expect to
+adapt imports/paths before running them again.
